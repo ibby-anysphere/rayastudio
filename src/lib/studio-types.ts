@@ -1,3 +1,14 @@
+// Maximum number of images the portrait edit endpoint accepts in a single
+// request: the source photo + contextual guide + makeup layers + wardrobe
+// references combined. Shared by the client budget guard and the server.
+export const MAX_INPUT_IMAGES = 14;
+
+// Per-type sub-caps enforced by the edit endpoint. Wardrobe references and
+// makeup layers each have their own ceiling in addition to the combined image
+// budget above, and they are the binding limits before the total is reached.
+export const MAX_WARDROBE_REFERENCES = 8;
+export const MAX_MAKEUP_LAYERS = 4;
+
 export type StudioTab = "makeup" | "wardrobe" | "create";
 export type CanvasTool = "select" | "brush" | "eraser";
 export type AssetCategory = "jewelry" | "eyewear" | "hair" | "garment" | "accessory";

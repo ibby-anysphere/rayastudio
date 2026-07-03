@@ -39,16 +39,20 @@ import {
   prepareUpload,
   recommendedAspectRatio,
 } from "@/lib/image-utils";
-import type {
-  AssetCategory,
-  BrushSettings,
-  CanvasTool,
-  GenerationIntent,
-  HistoryItem,
-  PlacedAsset,
-  RenderMode,
-  StudioAsset,
-  StudioTab,
+import {
+  MAX_INPUT_IMAGES,
+  MAX_MAKEUP_LAYERS,
+  MAX_WARDROBE_REFERENCES,
+  type AssetCategory,
+  type BrushSettings,
+  type CanvasTool,
+  type GenerationIntent,
+  type HistoryItem,
+  type MakeupProductId,
+  type PlacedAsset,
+  type RenderMode,
+  type StudioAsset,
+  type StudioTab,
 } from "@/lib/studio-types";
 import {
   loadWardrobeAssets,
@@ -155,6 +159,30 @@ export function RiyaStudio() {
   const hasGuide = guideState.hasMarks;
   const hasPendingEdits = hasGuide || layers.length > 0;
 
+  // Mirror the server's per-request image budget. Every look sends the source
+  // photo plus a contextual guide (present as soon as anything is added), one
+  // image per painted makeup product, and one per unique wardrobe reference.
+  // Duplicated artifacts reuse a single reference, so they never grow the count.
+  const uniqueAssetCount = useMemo(
+    () => new Set(layers.map((layer) => layer.asset.id)).size,
+    [layers],
+  );
+  const makeupProductCount = guideState.products.length;
+
+  // Slots for wardrobe references once the source photo, contextual guide, and
+  // makeup layers are accounted for — capped by the dedicated reference ceiling.
+  const referenceBudget = Math.max(
+    0,
+    Math.min(MAX_WARDROBE_REFERENCES, MAX_INPUT_IMAGES - 2 - makeupProductCount),
+  );
+  const canAddNewArtifact = uniqueAssetCount < referenceBudget;
+
+  // A new makeup product adds one layer; block it only if the combined image
+  // budget (or the makeup layer ceiling) would be exceeded.
+  const canAddNewMakeupProduct =
+    makeupProductCount < MAX_MAKEUP_LAYERS &&
+    2 + (makeupProductCount + 1) + uniqueAssetCount <= MAX_INPUT_IMAGES;
+
   const showToast = (
     tone: ToastMessage["tone"],
     title: string,
@@ -250,6 +278,16 @@ export function RiyaStudio() {
       return;
     }
 
+    const isNewReference = !layers.some((layer) => layer.asset.id === asset.id);
+    if (isNewReference && !canAddNewArtifact) {
+      showToast(
+        "info",
+        "Image limit reached",
+        `A look can include up to ${MAX_INPUT_IMAGES} images. Remove an artifact or a makeup product before adding another piece.`,
+      );
+      return;
+    }
+
     const placement = defaultPlacement(asset);
     const instanceId = makeId("piece");
     setLayers((existing) => [
@@ -270,6 +308,22 @@ export function RiyaStudio() {
   const handleDropAsset = (assetId: string, x: number, y: number) => {
     const asset = allAssets.find((candidate) => candidate.id === assetId);
     if (asset) placeAsset(asset, { x, y });
+  };
+
+  // Gate the first stroke of a not-yet-painted makeup product when the image
+  // budget is full. Repainting or erasing an existing product never adds an
+  // image, so it stays available.
+  const canPaintProduct = (product: MakeupProductId) => {
+    const alreadyPainted = guideState.products.includes(product);
+    if (!alreadyPainted && !canAddNewMakeupProduct) {
+      showToast(
+        "info",
+        "Image limit reached",
+        `A look can include up to ${MAX_INPUT_IMAGES} images. Remove an artifact or a makeup product before adding a new one.`,
+      );
+      return false;
+    }
+    return true;
   };
 
   const updateLayer = (instanceId: string, patch: Partial<PlacedAsset>) => {
@@ -314,8 +368,11 @@ export function RiyaStudio() {
       const maxReferenceCount = Math.max(
         0,
         Math.min(
-          8,
-          14 - 1 - Number(Boolean(contextualGuide)) - guideLayers.length,
+          MAX_WARDROBE_REFERENCES,
+          MAX_INPUT_IMAGES -
+            1 -
+            Number(Boolean(contextualGuide)) -
+            guideLayers.length,
         ),
       );
       const expectedReferenceCount = Math.min(
@@ -694,6 +751,7 @@ export function RiyaStudio() {
               onUpdateLayer={updateLayer}
               onRemoveLayer={removeLayer}
               onGuideChange={setGuideState}
+              onBeforePaint={canPaintProduct}
             />
 
             {currentImage && (

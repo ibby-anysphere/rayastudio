@@ -68,6 +68,7 @@ interface CanvasStageProps {
   onUpdateLayer: (instanceId: string, patch: Partial<PlacedAsset>) => void;
   onRemoveLayer: (instanceId: string) => void;
   onGuideChange: (state: MakeupGuideState) => void;
+  onBeforePaint?: (product: MakeupProductId) => boolean;
 }
 
 interface LayerDrag {
@@ -238,6 +239,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       onUpdateLayer,
       onRemoveLayer,
       onGuideChange,
+      onBeforePaint,
     },
     forwardedRef,
   ) {
@@ -523,6 +525,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
 
     const beginDrawing = (event: ReactPointerEvent<HTMLCanvasElement>) => {
       if (tool !== "brush" && tool !== "eraser") return;
+      if (tool === "brush" && onBeforePaint && !onBeforePaint(brush.product)) {
+        return;
+      }
       const canvas = event.currentTarget;
       const bounds = canvas.getBoundingClientRect();
       const displaySize = displayedBrushSize(tool, brush);

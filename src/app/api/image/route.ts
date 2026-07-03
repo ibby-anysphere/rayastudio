@@ -10,10 +10,13 @@ import {
   type GeminiAspectRatio,
   type GeminiRenderMode,
 } from "@/lib/gemini-image";
-import type {
-  AssetCategory,
-  GenerationIntent,
-  MakeupProductId,
+import {
+  MAX_INPUT_IMAGES,
+  MAX_MAKEUP_LAYERS,
+  MAX_WARDROBE_REFERENCES,
+  type AssetCategory,
+  type GenerationIntent,
+  type MakeupProductId,
 } from "@/lib/studio-types";
 
 export const runtime = "nodejs";
@@ -36,7 +39,6 @@ const ALLOWED_MAKEUP_PRODUCTS = new Set<MakeupProductId>([
   "eyeliner",
 ]);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
-const MAX_INPUT_IMAGES = 14;
 const MAX_FILE_SIZE = 24 * 1024 * 1024;
 const MAX_REQUEST_SIZE = 14 * 1024 * 1024;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
@@ -104,7 +106,7 @@ function safeIntent(raw: FormDataEntryValue | null): GenerationIntent | null {
 
     const seenProducts = new Set<MakeupProductId>();
     const makeupLayers: GenerationIntent["makeupLayers"] = [];
-    for (const layer of parsed.makeupLayers.slice(0, 4)) {
+    for (const layer of parsed.makeupLayers.slice(0, MAX_MAKEUP_LAYERS)) {
       if (
         !layer ||
         !ALLOWED_MAKEUP_PRODUCTS.has(layer.product) ||
@@ -608,7 +610,7 @@ export async function POST(request: Request) {
       );
     }
     if (
-      makeupLayerEntries.length > 4 ||
+      makeupLayerEntries.length > MAX_MAKEUP_LAYERS ||
       makeupLayerEntries.length !== intent.makeupLayers.length ||
       !makeupLayerEntries.every(isImageFile)
     ) {
@@ -619,11 +621,14 @@ export async function POST(request: Request) {
       );
     }
     const referenceEntries = form.getAll("references");
-    if (referenceEntries.length > 8 || !referenceEntries.every(isImageFile)) {
+    if (
+      referenceEntries.length > MAX_WARDROBE_REFERENCES ||
+      !referenceEntries.every(isImageFile)
+    ) {
       return errorResponse(
         400,
         "A wardrobe reference is invalid",
-        "Use up to 8 JPG, PNG, or WebP reference images.",
+        `Use up to ${MAX_WARDROBE_REFERENCES} JPG, PNG, or WebP reference images.`,
       );
     }
     const totalInputCount =
