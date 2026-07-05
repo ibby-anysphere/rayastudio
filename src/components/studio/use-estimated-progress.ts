@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type GenerationProfile = "portrait-fast" | "portrait-max" | "asset";
+export type GenerationProfile =
+  | "portrait-fast"
+  | "portrait-max"
+  | "asset"
+  | "asset-upload"
+  | "fashion-artifact";
 
 export interface EstimatedProgress {
   percent: number;
@@ -34,6 +39,14 @@ const progressProfiles: Record<GenerationProfile, ProgressProfile> = {
     baseMs: 24_000,
     perExtraInputMs: 0,
   },
+  "asset-upload": {
+    baseMs: 68_000,
+    perExtraInputMs: 0,
+  },
+  "fashion-artifact": {
+    baseMs: 62_000,
+    perExtraInputMs: 7_000,
+  },
 };
 
 const initialProgress: EstimatedProgress = {
@@ -53,7 +66,9 @@ function readTimingSamples() {
         "profile" in sample &&
         (sample.profile === "portrait-fast" ||
           sample.profile === "portrait-max" ||
-          sample.profile === "asset") &&
+          sample.profile === "asset" ||
+          sample.profile === "asset-upload" ||
+          sample.profile === "fashion-artifact") &&
         "inputCount" in sample &&
         typeof sample.inputCount === "number" &&
         "durationMs" in sample &&

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
   Brush,
@@ -8,15 +8,10 @@ import {
   Clock3,
   Eraser,
   Eye,
-  FolderPlus,
-  Gauge,
-  Gem,
   HelpCircle,
   ImagePlus,
-  Layers3,
-  Minus,
-  MousePointer2,
-  Plus,
+  PaintBucket,
+  PenLine,
   RotateCcw,
   Sparkles,
   Undo2,
@@ -24,28 +19,44 @@ import {
   X,
   Zap,
 } from "lucide-react";
+import { RayaLoadingScreen } from "@/components/brand/raya-loading-screen";
+import { RayaLogo } from "@/components/brand/raya-logo";
 import {
   CanvasStage,
   type CanvasStageHandle,
+  type FashionGuideLayer,
   type MakeupGuideState,
 } from "@/components/studio/canvas-stage";
 import { Inspector } from "@/components/studio/inspector";
 import { useEstimatedProgress } from "@/components/studio/use-estimated-progress";
 import { catalogAssets } from "@/lib/studio-catalog";
 import {
+  clearHistoryImages,
+  loadHistoryImage,
+  removeHistoryImage,
+  saveHistoryImage,
+} from "@/lib/history-db";
+import {
   assetSourceToPngFile,
+  createImageThumbnail,
   dataUrlToFile,
-  downloadDataUrl,
+  prepareArtifactUpload,
   prepareUpload,
   recommendedAspectRatio,
+  saveImageToDevice,
 } from "@/lib/image-utils";
 import {
+  MAX_FASHION_LAYERS,
   MAX_INPUT_IMAGES,
   MAX_MAKEUP_LAYERS,
   MAX_WARDROBE_REFERENCES,
   type AssetCategory,
   type BrushSettings,
   type CanvasTool,
+  type ClosetMode,
+  type FashionGuideState,
+  type FashionSettings,
+  type GeneratedArtifactResult,
   type GenerationIntent,
   type HistoryItem,
   type MakeupProductId,
@@ -80,8 +91,22 @@ function makeId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function timestamp() {
+  return Date.now();
+}
+
 function holdForReveal(milliseconds = 620) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function emptyFashionGuideState(): FashionGuideState {
+  return {
+    hasMarks: false,
+    hasOutline: false,
+    canUndo: false,
+    selectedRegionId: null,
+    regions: [],
+  };
 }
 
 function pieceNameFromPrompt(prompt: string) {
@@ -92,6 +117,49 @@ function pieceNameFromPrompt(prompt: string) {
     .trim();
   const words = clean.split(" ").slice(0, 4).join(" ");
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Untitled piece";
+}
+
+function isAssetCategory(value: unknown): value is AssetCategory {
+  return (
+    typeof value === "string" &&
+    Object.prototype.hasOwnProperty.call(categoryAccent, value)
+  );
+}
+
+function fashionAssetsFromArtifacts(
+  artifacts: Array<Partial<GeneratedArtifactResult>>,
+  fallbackPrompt: string,
+) {
+  const createdAt = timestamp();
+  return artifacts.flatMap((artifact, index) => {
+    if (
+      typeof artifact.image !== "string" ||
+      !artifact.image.startsWith("data:image/") ||
+      !isAssetCategory(artifact.category)
+    ) {
+      return [];
+    }
+    const prompt =
+      typeof artifact.prompt === "string" && artifact.prompt.trim()
+        ? artifact.prompt.trim()
+        : fallbackPrompt;
+    const name =
+      typeof artifact.name === "string" && artifact.name.trim()
+        ? artifact.name.trim().slice(0, 80)
+        : pieceNameFromPrompt(prompt);
+    return [
+      {
+        id: makeId("custom"),
+        name,
+        category: artifact.category,
+        prompt,
+        src: artifact.image,
+        accent: categoryAccent[artifact.category],
+        custom: true,
+        createdAt: createdAt - index,
+      } satisfies StudioAsset,
+    ];
+  });
 }
 
 function defaultPlacement(asset: StudioAsset) {
@@ -117,16 +185,36 @@ function defaultPlacement(asset: StudioAsset) {
 export function RiyaStudio() {
   const canvasRef = useRef<CanvasStageHandle>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const imageUrlsRef = useRef(new Set<string>());
+  const currentImageRef = useRef<string | null>(null);
+  const originalImageRef = useRef<string | null>(null);
+  const originalHistoryIdRef = useRef<string | null>(null);
+  const createdSourceImageRef = useRef<string | null>(null);
+  const historyFallbackRef = useRef(new Map<string, Blob>());
+  const historySelectionRef = useRef(0);
+  const revisionCountRef = useRef(0);
   const portraitGeneration = useEstimatedProgress();
   const assetGeneration = useEstimatedProgress();
+  const fashionArtifactGeneration = useEstimatedProgress();
 
+  const [brandIntroState, setBrandIntroState] = useState<
+    "visible" | "leaving" | "hidden"
+  >("visible");
   const [tab, setTab] = useState<StudioTab>("makeup");
-  const [tool, setTool] = useState<CanvasTool>("select");
+  const [tool, setTool] = useState<CanvasTool>("brush");
+  const [closetMode, setClosetMode] = useState<ClosetMode>("pieces");
   const [brush, setBrush] = useState<BrushSettings>({
     product: "lipstick",
     color: "#c64f6a",
     size: 18,
     opacity: 0.68,
+  });
+  const [fashion, setFashion] = useState<FashionSettings>({
+    category: "auto",
+    material: "cashmere",
+    pattern: "solid",
+    color: "#d83f5f",
+    size: 8,
   });
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [currentImage, setCurrentImage] = useState<string | null>(null);
@@ -138,16 +226,26 @@ export function RiyaStudio() {
     canUndo: false,
     products: [],
   });
+  const [fashionState, setFashionState] = useState<FashionGuideState>({
+    hasMarks: false,
+    hasOutline: false,
+    canUndo: false,
+    selectedRegionId: null,
+    regions: [],
+  });
   const [showOriginal, setShowOriginal] = useState(false);
-  const [zoom, setZoom] = useState(100);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [currentHistoryId, setCurrentHistoryId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [customAssets, setCustomAssets] = useState<StudioAsset[]>([]);
-  const [createdAsset, setCreatedAsset] = useState<StudioAsset | null>(null);
+  const [createdAssets, setCreatedAssets] = useState<StudioAsset[]>([]);
+  const [createdSourceImage, setCreatedSourceImage] = useState<string | null>(null);
+  const [createdSourceName, setCreatedSourceName] = useState("");
+  const [fashionArtifacts, setFashionArtifacts] = useState<StudioAsset[]>([]);
+  const [materializingFashion, setMaterializingFashion] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [creatingAsset, setCreatingAsset] = useState(false);
   const [renderMode, setRenderMode] = useState<RenderMode>("fast");
-  const [apiConfigured, setApiConfigured] = useState<boolean | null>(null);
   const [editApiConfigured, setEditApiConfigured] = useState<boolean | null>(null);
   const [assetApiConfigured, setAssetApiConfigured] = useState<boolean | null>(null);
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -157,7 +255,14 @@ export function RiyaStudio() {
     [customAssets],
   );
   const hasGuide = guideState.hasMarks;
-  const hasPendingEdits = hasGuide || layers.length > 0;
+  const hasFashionGuide = fashionState.hasMarks;
+  const hasPendingEdits = hasGuide || hasFashionGuide || layers.length > 0;
+  const interactionMode =
+    tab === "makeup"
+      ? "makeup"
+      : tab === "wardrobe" && closetMode === "draw"
+        ? "fashion"
+        : "idle";
 
   // Mirror the server's per-request image budget. Every look sends the source
   // photo plus a contextual guide (present as soon as anything is added), one
@@ -168,12 +273,22 @@ export function RiyaStudio() {
     [layers],
   );
   const makeupProductCount = guideState.products.length;
+  // Filled fashion shapes are sent independently so their material and print
+  // meaning cannot bleed together. Before the first fill, the outline itself
+  // occupies one guide slot.
+  const fashionLayerCount =
+    fashionState.regions.length > 0
+      ? fashionState.regions.length
+      : Number(fashionState.hasOutline);
 
   // Slots for wardrobe references once the source photo, contextual guide, and
-  // makeup layers are accounted for — capped by the dedicated reference ceiling.
+  // authored guide layers are accounted for — capped by the reference ceiling.
   const referenceBudget = Math.max(
     0,
-    Math.min(MAX_WARDROBE_REFERENCES, MAX_INPUT_IMAGES - 2 - makeupProductCount),
+    Math.min(
+      MAX_WARDROBE_REFERENCES,
+      MAX_INPUT_IMAGES - 2 - makeupProductCount - fashionLayerCount,
+    ),
   );
   const canAddNewArtifact = uniqueAssetCount < referenceBudget;
 
@@ -181,7 +296,11 @@ export function RiyaStudio() {
   // budget (or the makeup layer ceiling) would be exceeded.
   const canAddNewMakeupProduct =
     makeupProductCount < MAX_MAKEUP_LAYERS &&
-    2 + (makeupProductCount + 1) + uniqueAssetCount <= MAX_INPUT_IMAGES;
+    2 +
+      (makeupProductCount + 1) +
+      fashionLayerCount +
+      uniqueAssetCount <=
+      MAX_INPUT_IMAGES;
 
   const showToast = (
     tone: ToastMessage["tone"],
@@ -189,26 +308,109 @@ export function RiyaStudio() {
     detail?: string,
   ) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToast({ id: Date.now(), tone, title, detail });
+    setToast({ id: timestamp(), tone, title, detail });
     toastTimerRef.current = setTimeout(() => setToast(null), 5200);
   };
 
+  const createManagedImageUrl = (blob: Blob) => {
+    const url = URL.createObjectURL(blob);
+    imageUrlsRef.current.add(url);
+    return url;
+  };
+
+  const releaseImageUrl = (url: string | null) => {
+    if (!url || !imageUrlsRef.current.has(url)) return;
+    URL.revokeObjectURL(url);
+    imageUrlsRef.current.delete(url);
+  };
+
+  const replaceCreatedSourceImage = (
+    nextImage: string | null,
+    nextName = "",
+  ) => {
+    const previousImage = createdSourceImageRef.current;
+    createdSourceImageRef.current = nextImage;
+    setCreatedSourceImage(nextImage);
+    setCreatedSourceName(nextName);
+    if (previousImage && previousImage !== nextImage) {
+      releaseImageUrl(previousImage);
+    }
+  };
+
+  const replaceCurrentImage = (nextImage: string) => {
+    const previousImage = currentImageRef.current;
+    currentImageRef.current = nextImage;
+    setCurrentImage(nextImage);
+    if (
+      previousImage &&
+      previousImage !== nextImage &&
+      previousImage !== originalImageRef.current
+    ) {
+      releaseImageUrl(previousImage);
+    }
+  };
+
+  const persistHistoryBlob = async (id: string, blob: Blob) => {
+    try {
+      await saveHistoryImage(id, blob);
+      historyFallbackRef.current.delete(id);
+    } catch {
+      // Compressed blobs are a much smaller fallback than base64 images if
+      // IndexedDB is unavailable (for example, in private browsing).
+      historyFallbackRef.current.set(id, blob);
+    }
+  };
+
+  const readHistoryBlob = async (id: string) => {
+    const fallback = historyFallbackRef.current.get(id);
+    if (fallback) return fallback;
+    try {
+      return await loadHistoryImage(id);
+    } catch {
+      return null;
+    }
+  };
+
+  const discardHistoryBlob = (id: string) => {
+    historyFallbackRef.current.delete(id);
+    void removeHistoryImage(id).catch(() => undefined);
+  };
+
   useEffect(() => {
+    const reducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    const leaveTimer = window.setTimeout(
+      () => setBrandIntroState("leaving"),
+      2200,
+    );
+    const hideTimer = window.setTimeout(
+      () => setBrandIntroState("hidden"),
+      reducedMotion ? 2220 : 2480,
+    );
+
+    return () => {
+      window.clearTimeout(leaveTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    const imageUrls = imageUrlsRef.current;
+    const historyFallback = historyFallbackRef.current;
+
     fetch("/api/status", { cache: "no-store" })
       .then((response) => response.json())
       .then(
         (data: {
-          configured?: boolean;
           editConfigured?: boolean;
           assetConfigured?: boolean;
         }) => {
-          setApiConfigured(Boolean(data.configured));
           setEditApiConfigured(Boolean(data.editConfigured));
           setAssetApiConfigured(Boolean(data.assetConfigured));
         },
       )
       .catch(() => {
-        setApiConfigured(false);
         setEditApiConfigured(false);
         setAssetApiConfigured(false);
       });
@@ -221,42 +423,47 @@ export function RiyaStudio() {
 
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      for (const url of imageUrls) URL.revokeObjectURL(url);
+      imageUrls.clear();
+      historyFallback.clear();
+      void clearHistoryImages().catch(() => undefined);
     };
   }, []);
-
-  const resetProject = () => {
-    setOriginalImage(null);
-    setCurrentImage(null);
-    setImageName("Untitled portrait");
-    setLayers([]);
-    setSelectedLayerId(null);
-    setHistory([]);
-    setGuideState({ hasMarks: false, canUndo: false, products: [] });
-    setShowOriginal(false);
-    setZoom(100);
-    setTool("select");
-    setHistoryOpen(false);
-    canvasRef.current?.clearGuide();
-  };
 
   const handleUpload = async (file: File) => {
     try {
       const prepared = await prepareUpload(file);
-      setOriginalImage(prepared.dataUrl);
-      setCurrentImage(prepared.dataUrl);
+      const thumbnail = await createImageThumbnail(prepared.blob);
+      const historyId = makeId("history");
+
+      historySelectionRef.current += 1;
+      for (const url of imageUrlsRef.current) URL.revokeObjectURL(url);
+      imageUrlsRef.current.clear();
+      historyFallbackRef.current.clear();
+      revisionCountRef.current = 0;
+      await clearHistoryImages().catch(() => undefined);
+
+      const imageUrl = createManagedImageUrl(prepared.blob);
+      originalImageRef.current = imageUrl;
+      currentImageRef.current = imageUrl;
+      originalHistoryIdRef.current = historyId;
+      setOriginalImage(imageUrl);
+      setCurrentImage(imageUrl);
       setImageName(prepared.name);
       setLayers([]);
       setSelectedLayerId(null);
       setHistory([
         {
-          id: makeId("history"),
-          image: prepared.dataUrl,
+          id: historyId,
+          thumbnail,
           label: "Original",
-          createdAt: Date.now(),
+          createdAt: timestamp(),
         },
       ]);
-      setTool("select");
+      setCurrentHistoryId(historyId);
+      setTool(tab === "wardrobe" && closetMode === "draw" ? "pencil" : "brush");
       setGuideState({ hasMarks: false, canUndo: false, products: [] });
+      setFashionState(emptyFashionGuideState());
       setHistoryOpen(false);
       requestAnimationFrame(() => canvasRef.current?.clearGuide());
       showToast("success", "Portrait ready", "Now paint, style, or drag a piece onto the canvas.");
@@ -273,6 +480,7 @@ export function RiyaStudio() {
     asset: StudioAsset,
     position?: { x: number; y: number },
   ) => {
+    if (generating) return;
     if (!currentImage) {
       showToast("info", "Start with a portrait", "Upload a photo before placing a piece.");
       return;
@@ -302,7 +510,6 @@ export function RiyaStudio() {
       },
     ]);
     setSelectedLayerId(instanceId);
-    setTool("select");
   };
 
   const handleDropAsset = (assetId: string, x: number, y: number) => {
@@ -326,6 +533,95 @@ export function RiyaStudio() {
     return true;
   };
 
+  const canFillFashionRegion = () => {
+    const nextFashionLayerCount =
+      fashionState.regions.length === 0 ? 1 : fashionState.regions.length + 1;
+    if (
+      nextFashionLayerCount > MAX_FASHION_LAYERS ||
+      2 +
+        makeupProductCount +
+        nextFashionLayerCount +
+        uniqueAssetCount >
+        MAX_INPUT_IMAGES
+    ) {
+      showToast(
+        "info",
+        "Your magic layers are full",
+        `Use up to ${MAX_FASHION_LAYERS} filled shapes in one look, or remove another visual layer first.`,
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const handleFashionGuideChange = useCallback((next: FashionGuideState) => {
+    setFashionState(next);
+    const selected = next.regions.find(
+      (region) => region.id === next.selectedRegionId,
+    );
+    if (!selected) return;
+    setFashion((current) => ({
+      ...current,
+      category: selected.category,
+      material: selected.material,
+      pattern: selected.pattern,
+      color: selected.color,
+    }));
+  }, []);
+
+  const updateFashionSettings = (patch: Partial<FashionSettings>) => {
+    setFashion((current) => ({ ...current, ...patch }));
+    if (fashionState.selectedRegionId) {
+      const stylePatch: Partial<Omit<FashionSettings, "size">> = {};
+      if (patch.category) stylePatch.category = patch.category;
+      if (patch.material) stylePatch.material = patch.material;
+      if (patch.pattern) stylePatch.pattern = patch.pattern;
+      if (patch.color) stylePatch.color = patch.color;
+      if (Object.keys(stylePatch).length > 0) {
+        canvasRef.current?.updateFashionRegionStyle(
+          fashionState.selectedRegionId,
+          stylePatch,
+        );
+      }
+    }
+  };
+
+  const changeClosetMode = (mode: ClosetMode) => {
+    setClosetMode(mode);
+    setTab("wardrobe");
+    setSelectedLayerId(null);
+    setTool(mode === "draw" ? "pencil" : "brush");
+  };
+
+  const changeTab = (nextTab: StudioTab) => {
+    setTab(nextTab);
+    if (nextTab === "makeup") {
+      setTool((current) => (current === "eraser" ? current : "brush"));
+    } else if (nextTab === "wardrobe" && closetMode === "draw") {
+      setTool((current) =>
+        current === "fill" || current === "eraser" ? current : "pencil",
+      );
+    }
+  };
+
+  const handleFashionFillResult = (
+    result: "filled" | "repaired" | "selected" | "miss",
+  ) => {
+    if (result === "repaired") {
+      showToast(
+        "success",
+        "Tiny gaps fixed",
+        "RIYA joined the nearby lines and filled your shape.",
+      );
+    } else if (result === "miss") {
+      showToast(
+        "info",
+        "Give the shape one more line",
+        "Draw a little more around the open side, then tap or hold inside again.",
+      );
+    }
+  };
+
   const updateLayer = (instanceId: string, patch: Partial<PlacedAsset>) => {
     setLayers((existing) =>
       existing.map((layer) =>
@@ -339,9 +635,126 @@ export function RiyaStudio() {
     setSelectedLayerId((selected) => (selected === instanceId ? null : selected));
   };
 
+  const materializeFashionFromLook = async ({
+    finalBlob,
+    fashionGuides,
+    intent,
+  }: {
+    finalBlob: Blob;
+    fashionGuides: FashionGuideLayer[];
+    intent: GenerationIntent;
+  }) => {
+    if (fashionGuides.length === 0) return;
+    if (assetApiConfigured === false) {
+      showToast(
+        "info",
+        "Your look is ready",
+        "Connect the closet model later to save this drawing as a reusable piece.",
+      );
+      return;
+    }
+
+    setFashionArtifacts([]);
+    setTab("wardrobe");
+    setClosetMode("draw");
+    setMaterializingFashion(true);
+    fashionArtifactGeneration.start("fashion-artifact", fashionGuides.length);
+    let completed = false;
+
+    try {
+      const sourceFile = new File(
+        [finalBlob],
+        "finished-look.jpg",
+        { type: finalBlob.type || "image/jpeg" },
+      );
+      const sourceBlob =
+        finalBlob.size <= 3.8 * 1024 * 1024
+          ? finalBlob
+          : (await prepareArtifactUpload(sourceFile)).blob;
+      const sourceType = sourceBlob.type || "image/jpeg";
+      const form = new FormData();
+      form.append("mode", "fashion-artifactize");
+      form.append(
+        "source",
+        new File([sourceBlob], "finished-look.jpg", {
+          type: sourceType,
+        }),
+      );
+      for (const guide of fashionGuides) {
+        form.append(
+          "fashionLayers",
+          new File([guide.blob], `drawn-piece-${guide.id}.png`, {
+            type: "image/png",
+          }),
+        );
+      }
+      form.append("intent", JSON.stringify(intent));
+
+      const response = await fetch("/api/image", {
+        method: "POST",
+        body: form,
+      });
+      const data = (await response.json().catch(() => null)) as {
+        artifacts?: Array<Partial<GeneratedArtifactResult>>;
+        detectedCount?: number;
+        failedCount?: number;
+        error?: string;
+        detail?: string;
+      } | null;
+      if (!response.ok) {
+        throw new Error(
+          data?.detail ||
+            data?.error ||
+            "The drawing could not be turned into a closet piece",
+        );
+      }
+
+      const assets = fashionAssetsFromArtifacts(
+        data?.artifacts ?? [],
+        "Materialized from a hand-drawn fashion design",
+      );
+      if (assets.length === 0) {
+        throw new Error("The closet model did not return a usable piece");
+      }
+
+      setFashionArtifacts(assets);
+      fashionArtifactGeneration.complete();
+      completed = true;
+      await holdForReveal(420);
+      const failedCount =
+        typeof data?.failedCount === "number" ? data.failedCount : 0;
+      showToast(
+        failedCount > 0 ? "info" : "success",
+        `${assets.length} closet ${assets.length === 1 ? "piece is" : "pieces are"} ready`,
+        failedCount > 0
+          ? "Keep the pieces you love. One drawing could not be isolated."
+          : "Keep what you love—nothing is added until you choose it.",
+      );
+    } catch (error) {
+      showToast(
+        "info",
+        "Your finished look is safe",
+        error instanceof Error
+          ? `The reusable closet piece paused: ${error.message}`
+          : "The reusable closet piece can be tried again later.",
+      );
+    } finally {
+      if (!completed) fashionArtifactGeneration.cancel();
+      setMaterializingFashion(false);
+    }
+  };
+
   const applyEdits = async () => {
     if (!currentImage) {
       showToast("info", "Start with a portrait", "Choose a photo to begin your look.");
+      return;
+    }
+    if (materializingFashion) {
+      showToast(
+        "info",
+        "Closet pieces are still finishing",
+        "Wait for the current drawn pieces before imagining another look.",
+      );
       return;
     }
     if (editApiConfigured === false) {
@@ -359,12 +772,17 @@ export function RiyaStudio() {
     let progressStarted = false;
 
     try {
-      const guideMaxDimension = renderMode === "max" ? 2048 : 1024;
-      const [contextualGuide, makeupGuides] = await Promise.all([
-        canvasRef.current?.createContextualGuideBlob(guideMaxDimension),
-        canvasRef.current?.createMakeupGuideLayers(guideMaxDimension),
-      ]);
-      const guideLayers = makeupGuides ?? [];
+      // 1K instruction guides are sufficient for placement even when Gemini's
+      // final output is 2K. Build them sequentially to bound peak iPad memory.
+      const guideMaxDimension = 1024;
+      const contextualGuide =
+        await canvasRef.current?.createContextualGuideBlob(guideMaxDimension);
+      const makeupGuides =
+        await canvasRef.current?.createMakeupGuideLayers(guideMaxDimension);
+      const makeupLayers = makeupGuides ?? [];
+      const fashionGuides =
+        await canvasRef.current?.createFashionGuideLayers(guideMaxDimension);
+      const fashionLayers = fashionGuides ?? [];
       const maxReferenceCount = Math.max(
         0,
         Math.min(
@@ -372,7 +790,8 @@ export function RiyaStudio() {
           MAX_INPUT_IMAGES -
             1 -
             Number(Boolean(contextualGuide)) -
-            guideLayers.length,
+            makeupLayers.length -
+            fashionLayers.length,
         ),
       );
       const expectedReferenceCount = Math.min(
@@ -383,7 +802,8 @@ export function RiyaStudio() {
         renderMode === "max" ? "portrait-max" : "portrait-fast",
         1 +
           Number(Boolean(contextualGuide)) +
-          guideLayers.length +
+          makeupLayers.length +
+          fashionLayers.length +
           expectedReferenceCount,
       );
       progressStarted = true;
@@ -401,7 +821,7 @@ export function RiyaStudio() {
           new File([contextualGuide], "contextual-guide.jpg", { type: "image/jpeg" }),
         );
       }
-      for (const guide of guideLayers) {
+      for (const guide of makeupLayers) {
         form.append(
           "makeupLayers",
           new File([guide.blob], `makeup-${guide.product}.png`, {
@@ -409,8 +829,19 @@ export function RiyaStudio() {
           }),
         );
       }
+      for (const guide of fashionLayers) {
+        form.append(
+          "fashionLayers",
+          new File([guide.blob], `fashion-${guide.id}.png`, {
+            type: "image/png",
+          }),
+        );
+      }
       let nextReferenceIndex =
-        2 + Number(Boolean(contextualGuide)) + guideLayers.length;
+        2 +
+        Number(Boolean(contextualGuide)) +
+        makeupLayers.length +
+        fashionLayers.length;
       const referenceIndexes = new Map<string, number>();
       const intentLayers: GenerationIntent["placedAssets"] = [];
 
@@ -447,9 +878,17 @@ export function RiyaStudio() {
       }
 
       const intent: GenerationIntent = {
-        makeupLayers: guideLayers.map((guide) => ({
+        makeupLayers: makeupLayers.map((guide) => ({
           product: guide.product,
           colors: guide.colors,
+        })),
+        fashionLayers: fashionLayers.map((guide) => ({
+          kind: guide.kind,
+          category: guide.category,
+          material: guide.material,
+          pattern: guide.pattern,
+          color: guide.color,
+          bounds: guide.bounds,
         })),
         placedAssets: intentLayers,
       };
@@ -459,30 +898,45 @@ export function RiyaStudio() {
         method: "POST",
         body: form,
       });
-      const data = (await response.json()) as {
-        image?: string;
-        error?: string;
-        detail?: string;
-      };
 
-      if (!response.ok || !data.image) {
-        throw new Error(data.detail || data.error || "The image could not be generated");
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
+        throw new Error(
+          data?.detail || data?.error || "The image could not be generated",
+        );
       }
-      const finalImage = data.image;
+      const finalBlob = await response.blob();
+      if (!finalBlob.size || !finalBlob.type.startsWith("image/")) {
+        throw new Error("The image model returned an invalid result");
+      }
 
-      const revisionNumber = history.filter((item) => item.label !== "Original").length + 1;
+      revisionCountRef.current += 1;
+      const historyId = makeId("history");
+      const thumbnail = await createImageThumbnail(finalBlob);
+      await persistHistoryBlob(historyId, finalBlob);
+      const finalImage = createManagedImageUrl(finalBlob);
       const historyItem: HistoryItem = {
-        id: makeId("history"),
-        image: finalImage,
-        label: `Look ${String(revisionNumber).padStart(2, "0")}`,
-        createdAt: Date.now(),
+        id: historyId,
+        thumbnail,
+        label: `Look ${String(revisionCountRef.current).padStart(2, "0")}`,
+        createdAt: timestamp(),
       };
-      setCurrentImage(finalImage);
-      setHistory((existing) => [...existing, historyItem].slice(-9));
+      replaceCurrentImage(finalImage);
+      setCurrentHistoryId(historyId);
+      setHistory((existing) => {
+        const next = [...existing, historyItem];
+        const removed = next.slice(0, Math.max(0, next.length - 9));
+        for (const item of removed) discardHistoryBlob(item.id);
+        return next.slice(-9);
+      });
       setLayers([]);
       setSelectedLayerId(null);
       setGuideState({ hasMarks: false, canUndo: false, products: [] });
-      setTool("select");
+      setFashionState(emptyFashionGuideState());
+      setTool(interactionMode === "fashion" ? "pencil" : "brush");
       canvasRef.current?.clearGuide();
       portraitGeneration.complete();
       completed = true;
@@ -490,8 +944,21 @@ export function RiyaStudio() {
       showToast(
         "success",
         "Your new look is ready",
-        "The original is untouched — hold Before to compare.",
+        fashionLayers.length > 0
+          ? "Now matching your finished drawing into reusable closet pieces."
+          : "The original is untouched — hold Before to compare.",
       );
+      if (fashionLayers.length > 0) {
+        // Reveal the finished portrait immediately. Closet materialization is a
+        // second, non-blocking-feeling step that uses this final render as the
+        // visual authority and the raw maps only to locate each drawn piece.
+        setGenerating(false);
+        await materializeFashionFromLook({
+          finalBlob,
+          fashionGuides: fashionLayers,
+          intent,
+        });
+      }
     } catch (error) {
       showToast(
         "error",
@@ -504,7 +971,15 @@ export function RiyaStudio() {
     }
   };
 
-  const createAsset = async (prompt: string, category: AssetCategory) => {
+  const createAsset = async (prompt: string) => {
+    if (prompt.trim().length < 3) {
+      showToast(
+        "info",
+        "Describe your piece",
+        "Enter at least 3 characters before creating.",
+      );
+      return;
+    }
     if (assetApiConfigured === false) {
       showToast(
         "error",
@@ -514,6 +989,8 @@ export function RiyaStudio() {
       return;
     }
 
+    replaceCreatedSourceImage(null);
+    setCreatedAssets([]);
     setCreatingAsset(true);
     assetGeneration.start("asset");
     let completed = false;
@@ -521,12 +998,12 @@ export function RiyaStudio() {
       const form = new FormData();
       form.append("mode", "asset");
       form.append("prompt", prompt);
-      form.append("category", category);
       form.append("renderMode", renderMode);
 
       const response = await fetch("/api/image", { method: "POST", body: form });
       const data = (await response.json()) as {
         image?: string;
+        category?: AssetCategory;
         error?: string;
         detail?: string;
       };
@@ -534,6 +1011,7 @@ export function RiyaStudio() {
         throw new Error(data.detail || data.error || "The piece could not be created");
       }
 
+      const category = data.category ?? "accessory";
       const asset: StudioAsset = {
         id: makeId("custom"),
         name: pieceNameFromPrompt(prompt),
@@ -542,15 +1020,18 @@ export function RiyaStudio() {
         src: data.image,
         accent: categoryAccent[category],
         custom: true,
-        createdAt: Date.now(),
+        createdAt: timestamp(),
       };
-      await saveWardrobeAsset(asset);
-      setCustomAssets((existing) => [asset, ...existing]);
-      setCreatedAsset(asset);
+      replaceCreatedSourceImage(null);
+      setCreatedAssets([asset]);
       assetGeneration.complete();
       completed = true;
       await holdForReveal();
-      showToast("success", "Saved to your atelier", "This piece will be here when you return.");
+      showToast(
+        "success",
+        "Your piece is ready",
+        "Add it to your closet or place it on a portrait.",
+      );
     } catch (error) {
       showToast(
         "error",
@@ -563,116 +1044,294 @@ export function RiyaStudio() {
     }
   };
 
+  const createAssetsFromImage = async (file: File) => {
+    if (assetApiConfigured === false) {
+      showToast(
+        "error",
+        "Connect the image model",
+        "Add a fresh OPENAI_API_KEY to .env.local and restart the studio.",
+      );
+      return;
+    }
+
+    setCreatingAsset(true);
+    assetGeneration.start("asset-upload");
+    let completed = false;
+    let sourceStaged = false;
+    try {
+      const prepared = await prepareArtifactUpload(file);
+      replaceCreatedSourceImage(
+        createManagedImageUrl(prepared.blob),
+        prepared.name,
+      );
+      setCreatedAssets([]);
+      sourceStaged = true;
+
+      const safeName =
+        prepared.name.replace(/[^a-z0-9_-]+/gi, "-").slice(0, 80) ||
+        "artifact-reference";
+      const form = new FormData();
+      form.append("mode", "artifactize");
+      form.append(
+        "source",
+        new File([prepared.blob], `${safeName}.jpg`, { type: "image/jpeg" }),
+      );
+
+      const response = await fetch("/api/image", { method: "POST", body: form });
+      const data = (await response.json().catch(() => null)) as {
+        artifacts?: Array<Partial<GeneratedArtifactResult>>;
+        detectedCount?: number;
+        failedCount?: number;
+        error?: string;
+        detail?: string;
+      } | null;
+      if (!response.ok) {
+        throw new Error(
+          data?.detail || data?.error || "The image could not be turned into artifacts",
+        );
+      }
+
+      const createdAt = timestamp();
+      const assets = (data?.artifacts ?? []).flatMap((artifact, index) => {
+        if (
+          typeof artifact.image !== "string" ||
+          !artifact.image.startsWith("data:image/") ||
+          !isAssetCategory(artifact.category)
+        ) {
+          return [];
+        }
+        const prompt =
+          typeof artifact.prompt === "string" && artifact.prompt.trim()
+            ? artifact.prompt.trim()
+            : "Digitized from an uploaded reference image";
+        const name =
+          typeof artifact.name === "string" && artifact.name.trim()
+            ? artifact.name.trim().slice(0, 80)
+            : pieceNameFromPrompt(prompt);
+        return [
+          {
+            id: makeId("custom"),
+            name,
+            category: artifact.category,
+            prompt,
+            src: artifact.image,
+            accent: categoryAccent[artifact.category],
+            custom: true,
+            createdAt: createdAt - index,
+          } satisfies StudioAsset,
+        ];
+      });
+      if (assets.length === 0) {
+        throw new Error("The image model did not return any usable artifacts");
+      }
+
+      setCreatedAssets(assets);
+      assetGeneration.complete();
+      completed = true;
+      await holdForReveal();
+
+      const failedCount =
+        typeof data?.failedCount === "number" ? data.failedCount : 0;
+      const detectedCount =
+        typeof data?.detectedCount === "number"
+          ? data.detectedCount
+          : assets.length + failedCount;
+      const details = [
+        failedCount > 0
+          ? `Created ${assets.length} of ${detectedCount} detected products.`
+          : assets.length > 1
+            ? "Each detected product is ready as its own piece."
+            : "Your new piece is ready.",
+        "Choose what to add to your closet or place on a portrait.",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      showToast(
+        "success",
+        `${assets.length} ${assets.length === 1 ? "piece" : "pieces"} ready`,
+        details,
+      );
+    } catch (error) {
+      if (sourceStaged) replaceCreatedSourceImage(null);
+      showToast(
+        "error",
+        "The image was not digitized",
+        error instanceof Error ? error.message : "Try another product image.",
+      );
+    } finally {
+      if (!completed) assetGeneration.cancel();
+      setCreatingAsset(false);
+    }
+  };
+
+  const addCreatedAssetToCloset = async (asset: StudioAsset) => {
+    if (customAssets.some((candidate) => candidate.id === asset.id)) {
+      setCreatedAssets((current) =>
+        current.filter((candidate) => candidate.id !== asset.id),
+      );
+      if (createdAssets.length === 1) {
+        replaceCreatedSourceImage(null);
+      }
+      return;
+    }
+
+    try {
+      await saveWardrobeAsset(asset);
+      setCustomAssets((existing) => [asset, ...existing]);
+      setCreatedAssets((current) =>
+        current.filter((candidate) => candidate.id !== asset.id),
+      );
+      if (createdAssets.length === 1) {
+        replaceCreatedSourceImage(null);
+      }
+      showToast("success", "Added to your closet", asset.name);
+    } catch {
+      showToast(
+        "error",
+        "Could not add the piece",
+        "Private browser storage did not respond.",
+      );
+    }
+  };
+
+  const addFashionArtifactToCloset = async (asset: StudioAsset) => {
+    try {
+      await saveWardrobeAsset(asset);
+      setCustomAssets((existing) =>
+        existing.some((candidate) => candidate.id === asset.id)
+          ? existing
+          : [asset, ...existing],
+      );
+      setFashionArtifacts((current) =>
+        current.filter((candidate) => candidate.id !== asset.id),
+      );
+      showToast("success", "Added to your closet", asset.name);
+    } catch {
+      showToast(
+        "error",
+        "Could not add the piece",
+        "Private browser storage did not respond.",
+      );
+    }
+  };
+
+  const dismissFashionArtifact = (asset: StudioAsset) => {
+    setFashionArtifacts((current) =>
+      current.filter((candidate) => candidate.id !== asset.id),
+    );
+  };
+
+  const dismissCreatedAsset = (asset: StudioAsset) => {
+    setCreatedAssets((current) =>
+      current.filter((candidate) => candidate.id !== asset.id),
+    );
+    setLayers((existing) =>
+      existing.filter((layer) => layer.asset.id !== asset.id),
+    );
+    if (createdAssets.length === 1) {
+      replaceCreatedSourceImage(null);
+    }
+  };
+
   const deleteCustomAsset = async (asset: StudioAsset) => {
     try {
       await removeWardrobeAsset(asset.id);
       setCustomAssets((existing) => existing.filter((candidate) => candidate.id !== asset.id));
       setLayers((existing) => existing.filter((layer) => layer.asset.id !== asset.id));
-      setCreatedAsset((current) => (current?.id === asset.id ? null : current));
+      setCreatedAssets((current) =>
+        current.filter((candidate) => candidate.id !== asset.id),
+      );
       showToast("info", "Piece removed", `${asset.name} was removed from your atelier.`);
     } catch {
       showToast("error", "Could not remove the piece", "Private browser storage did not respond.");
     }
   };
 
-  const selectHistoryItem = (item: HistoryItem) => {
-    setCurrentImage(item.image);
+  const selectHistoryItem = async (item: HistoryItem) => {
+    if (item.id === currentHistoryId) return;
+    const selection = ++historySelectionRef.current;
+    let nextImage: string | null = null;
+
+    if (item.id === originalHistoryIdRef.current) {
+      nextImage = originalImageRef.current;
+    } else {
+      const blob = await readHistoryBlob(item.id);
+      if (selection !== historySelectionRef.current) return;
+      if (blob) nextImage = createManagedImageUrl(blob);
+    }
+
+    if (!nextImage) {
+      showToast(
+        "error",
+        "That revision is unavailable",
+        "The device could not reload the full-resolution image.",
+      );
+      return;
+    }
+
+    replaceCurrentImage(nextImage);
+    setCurrentHistoryId(item.id);
     setLayers([]);
     setSelectedLayerId(null);
     setGuideState({ hasMarks: false, canUndo: false, products: [] });
-    setTool("select");
+    setFashionState(emptyFashionGuideState());
+    setTool(interactionMode === "fashion" ? "pencil" : "brush");
     canvasRef.current?.clearGuide();
   };
 
-  const exportImage = () => {
+  const downloadImage = async () => {
     if (!currentImage) {
-      showToast("info", "Nothing to export yet", "Upload and style a portrait first.");
+      showToast("info", "Nothing to download yet", "Upload and style a portrait first.");
       return;
     }
-    const extension = currentImage.startsWith("data:image/jpeg") ? "jpg" : "png";
-    const filename = `${imageName.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "riya-look"}-riya.${extension}`;
-    downloadDataUrl(currentImage, filename);
-    showToast("success", "High-resolution look exported");
+
+    const filename = `${imageName.toLowerCase().replace(/[^a-z0-9]+/g, "-") || "riya-look"}-riya`;
+    try {
+      const result = await saveImageToDevice(currentImage, filename);
+      if (result === "shared") {
+        showToast("success", "Photo saved or shared");
+      } else if (result === "downloaded") {
+        showToast("success", "Photo downloaded");
+      }
+    } catch (error) {
+      showToast(
+        "error",
+        "The photo could not be downloaded",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    }
   };
 
   return (
     <div className={styles.appShell}>
-      <nav className={styles.rail} aria-label="Studio navigation">
-        <button className={styles.wordmark} onClick={() => setTab("makeup")} aria-label="RIYA home">
-          <span>R</span>
-        </button>
-        <div className={styles.railPrimary}>
-          <button
-            className={styles.railAction}
-            onClick={resetProject}
-            data-tooltip="New canvas"
-          >
-            <FolderPlus size={19} />
-          </button>
-          <span className={styles.railDivider} />
-          <button
-            className={`${styles.railAction} ${tab === "wardrobe" ? styles.railActionActive : ""}`}
-            onClick={() => setTab("wardrobe")}
-            data-tooltip="Wardrobe"
-          >
-            <Gem size={19} />
-          </button>
-          <button
-            className={`${styles.railAction} ${historyOpen ? styles.railActionActive : ""}`}
-            onClick={() => setHistoryOpen((open) => !open)}
-            data-tooltip="Look history"
-          >
-            <Clock3 size={19} />
-            {history.length > 1 && <i>{history.length}</i>}
-          </button>
-        </div>
-        <div className={styles.railBottom}>
-          <button className={styles.railAction} data-tooltip="Studio tips">
-            <HelpCircle size={18} />
-          </button>
-          <button className={styles.avatar} aria-label="Your profile">
-            IB
-          </button>
-        </div>
-      </nav>
-
+      {brandIntroState !== "hidden" && (
+        <RayaLoadingScreen exiting={brandIntroState === "leaving"} />
+      )}
       <main className={styles.studio}>
-        <header className={styles.topbar}>
-          <div className={styles.projectIdentity}>
-            <div className={styles.projectIcon}>
-              <Layers3 size={16} />
-            </div>
-            <div>
-              <span>RIYA / PRIVATE ATELIER</span>
-              <strong>{currentImage ? imageName : "New styling session"}</strong>
-            </div>
-          </div>
-
-          <div className={styles.topbarCenter}>
-            <span className={styles.saveState}>
-              <i />
-              Saved locally
-            </span>
-            <span
-              className={`${styles.apiState} ${
-                apiConfigured ? styles.apiStateReady : styles.apiStateMissing
-              }`}
-              title={
-                apiConfigured
-                  ? "Gemini editing and OpenAI artifact models are connected"
-                  : "Add GEMINI_API_KEY and OPENAI_API_KEY to .env.local"
-              }
-            >
-              <i />
-              {apiConfigured === null
-                ? "Checking model"
-                : apiConfigured
-                  ? "Image model ready"
-                  : "Model not connected"}
-            </span>
-          </div>
+        <header className={styles.topbar} inert={generating ? true : undefined}>
+          <button
+            className={styles.headerBrand}
+            onClick={() => changeTab("makeup")}
+            aria-label="Raya Studio home"
+          >
+            <RayaLogo layout="horizontal" className={styles.headerBrandLogo} />
+          </button>
 
           <div className={styles.topbarActions}>
+            <button
+              className={`${styles.historyButton} ${
+                historyOpen ? styles.historyButtonActive : ""
+              }`}
+              onClick={() => setHistoryOpen((open) => !open)}
+              aria-expanded={historyOpen}
+              aria-label="Look history"
+            >
+              <Clock3 size={15} />
+              <span>History</span>
+              {history.length > 1 && (
+                <i className={styles.historyButtonBadge}>{history.length}</i>
+              )}
+            </button>
             <button
               className={styles.beforeButton}
               disabled={!originalImage || originalImage === currentImage}
@@ -684,49 +1343,91 @@ export function RiyaStudio() {
               <Eye size={15} />
               Hold for before
             </button>
-            <button className={styles.exportButton} onClick={exportImage}>
+            <button className={styles.exportButton} onClick={() => void downloadImage()}>
               <ArrowDownToLine size={15} />
-              Export
+              <span>Download</span>
             </button>
           </div>
         </header>
 
         <div className={styles.workbench}>
           <section className={styles.canvasColumn}>
-            <div className={styles.canvasTools}>
-              <button
-                className={tool === "select" ? styles.canvasToolActive : styles.canvasTool}
-                onClick={() => setTool("select")}
-                title="Select and move pieces"
-              >
-                <MousePointer2 size={16} />
-              </button>
-              <button
-                className={tool === "brush" ? styles.canvasToolActive : styles.canvasTool}
-                onClick={() => {
-                  setTool("brush");
-                  setTab("makeup");
-                }}
-                title="Paint makeup guide"
-              >
-                <Brush size={16} />
-              </button>
-              <button
-                className={tool === "eraser" ? styles.canvasToolActive : styles.canvasTool}
-                onClick={() => {
-                  setTool("eraser");
-                  setTab("makeup");
-                }}
-                title="Erase makeup guide"
-              >
-                <Eraser size={16} />
-              </button>
+            <div
+              className={`${styles.canvasTools} ${
+                interactionMode === "fashion" ? styles.canvasToolsFashion : ""
+              }`}
+              inert={generating ? true : undefined}
+            >
+              {interactionMode === "fashion" ? (
+                <>
+                  <button
+                    className={
+                      tool === "pencil" ? styles.canvasToolActive : styles.canvasTool
+                    }
+                    onClick={() => setTool("pencil")}
+                    title="Draw a smooth fashion outline"
+                  >
+                    <PenLine size={16} />
+                  </button>
+                  <button
+                    className={
+                      tool === "fill" ? styles.canvasToolActive : styles.canvasTool
+                    }
+                    onClick={() => setTool("fill")}
+                    title="Fill inside a shape"
+                  >
+                    <PaintBucket size={16} />
+                  </button>
+                  <button
+                    className={
+                      tool === "eraser" ? styles.canvasToolActive : styles.canvasTool
+                    }
+                    onClick={() => setTool("eraser")}
+                    title="Erase part of the fashion sketch"
+                  >
+                    <Eraser size={16} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className={
+                      tool === "brush" ? styles.canvasToolActive : styles.canvasTool
+                    }
+                    onClick={() => {
+                      setTool("brush");
+                      setTab("makeup");
+                    }}
+                    title="Paint makeup guide"
+                  >
+                    <Brush size={16} />
+                  </button>
+                  <button
+                    className={
+                      tool === "eraser" && interactionMode === "makeup"
+                        ? styles.canvasToolActive
+                        : styles.canvasTool
+                    }
+                    onClick={() => {
+                      setTool("eraser");
+                      setTab("makeup");
+                    }}
+                    title="Erase makeup guide"
+                  >
+                    <Eraser size={16} />
+                  </button>
+                </>
+              )}
               <span />
               <button
                 className={styles.canvasTool}
                 onClick={() => canvasRef.current?.undoGuide()}
-                disabled={!guideState.canUndo}
-                title="Undo brush stroke"
+                disabled={
+                  interactionMode === "fashion"
+                    ? !fashionState.canUndo
+                    : !guideState.canUndo
+                }
+                title="Undo last mark"
               >
                 <Undo2 size={16} />
               </button>
@@ -737,12 +1438,13 @@ export function RiyaStudio() {
               image={currentImage}
               originalImage={originalImage}
               imageName={imageName}
+              interactionMode={interactionMode}
               tool={tool}
               brush={brush}
+              fashion={fashion}
               layers={layers}
               selectedLayerId={selectedLayerId}
               showOriginal={showOriginal}
-              zoom={zoom}
               generating={generating}
               generationProgress={portraitGeneration.progress}
               onUpload={handleUpload}
@@ -751,31 +1453,17 @@ export function RiyaStudio() {
               onUpdateLayer={updateLayer}
               onRemoveLayer={removeLayer}
               onGuideChange={setGuideState}
+              onFashionGuideChange={handleFashionGuideChange}
               onBeforePaint={canPaintProduct}
+              onBeforeFashionFill={canFillFashionRegion}
+              onFashionFillResult={handleFashionFillResult}
             />
 
-            {currentImage && (
-              <div className={styles.zoomControls}>
-                <button
-                  onClick={() => setZoom((value) => Math.max(70, value - 10))}
-                  disabled={zoom <= 70}
-                >
-                  <Minus size={13} />
-                </button>
-                <button className={styles.zoomValue} onClick={() => setZoom(100)}>
-                  {zoom}%
-                </button>
-                <button
-                  onClick={() => setZoom((value) => Math.min(140, value + 10))}
-                  disabled={zoom >= 140}
-                >
-                  <Plus size={13} />
-                </button>
-              </div>
-            )}
-
             {historyOpen && (
-              <div className={styles.historyPanel}>
+              <div
+                className={styles.historyPanel}
+                inert={generating ? true : undefined}
+              >
                 <div className={styles.historyHead}>
                   <div>
                     <span className={styles.eyebrow}>Revision history</span>
@@ -795,11 +1483,15 @@ export function RiyaStudio() {
                     {[...history].reverse().map((item) => (
                       <button
                         key={item.id}
-                        className={currentImage === item.image ? styles.historyItemActive : styles.historyItem}
-                        onClick={() => selectHistoryItem(item)}
+                        className={
+                          currentHistoryId === item.id
+                            ? styles.historyItemActive
+                            : styles.historyItem
+                        }
+                        onClick={() => void selectHistoryItem(item)}
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={item.image} alt={item.label} />
+                        <img src={item.thumbnail} alt={item.label} />
                         <span>
                           <strong>{item.label}</strong>
                           <small>
@@ -816,31 +1508,25 @@ export function RiyaStudio() {
               </div>
             )}
 
-            <div className={styles.promptDock}>
+            <div
+              className={styles.promptDock}
+              inert={generating ? true : undefined}
+            >
               <div className={styles.renderModePanel}>
-                <div className={styles.renderModeHeading}>
-                  <div>
-                    <span>Image model</span>
-                    <small>Choose speed or maximum generation quality</small>
-                  </div>
-                  <Gauge size={16} />
-                </div>
                 <div
                   className={styles.renderModeOptions}
                   role="group"
-                  aria-label="Image model"
+                  aria-label="Generation mode"
                 >
                   <button
                     type="button"
                     className={renderMode === "fast" ? styles.renderModeActive : styles.renderMode}
                     aria-pressed={renderMode === "fast"}
                     onClick={() => setRenderMode("fast")}
+                    disabled={generating}
                   >
                     <Zap size={14} />
-                    <span>
-                      <strong>Fast</strong>
-                      <small>Nano Banana Lite · 1K</small>
-                    </span>
+                    <strong>Fast</strong>
                     {renderMode === "fast" && <Check size={12} />}
                   </button>
                   <button
@@ -848,12 +1534,10 @@ export function RiyaStudio() {
                     className={renderMode === "max" ? styles.renderModeActive : styles.renderMode}
                     aria-pressed={renderMode === "max"}
                     onClick={() => setRenderMode("max")}
+                    disabled={generating}
                   >
                     <Sparkles size={14} />
-                    <span>
-                      <strong>Pro</strong>
-                      <small>Nano Banana Pro · 2K</small>
-                    </span>
+                    <strong>Pro</strong>
                     {renderMode === "max" && <Check size={12} />}
                   </button>
                 </div>
@@ -861,14 +1545,19 @@ export function RiyaStudio() {
               <button
                 className={styles.applyButton}
                 onClick={applyEdits}
-                disabled={!currentImage || generating || !hasPendingEdits}
+                disabled={
+                  !currentImage ||
+                  generating ||
+                  materializingFashion ||
+                  !hasPendingEdits
+                }
               >
                 {generating ? (
                   "Creating…"
                 ) : (
                   <>
                     <WandSparkles size={17} />
-                    Apply edits
+                    Imagine
                   </>
                 )}
               </button>
@@ -877,29 +1566,52 @@ export function RiyaStudio() {
 
           <Inspector
             tab={tab}
-            onTabChange={setTab}
+            onTabChange={changeTab}
+            tool={tool}
             brush={brush}
             onBrushChange={(patch) => setBrush((current) => ({ ...current, ...patch }))}
-            tool={tool}
             onToolChange={setTool}
-            hasGuide={hasGuide}
-            canUndoGuide={guideState.canUndo}
-            guideProducts={guideState.products}
-            onUndoGuide={() => canvasRef.current?.undoGuide()}
-            onClearGuide={() => canvasRef.current?.clearGuide()}
+            closetMode={closetMode}
+            onClosetModeChange={changeClosetMode}
+            fashion={fashion}
+            fashionState={fashionState}
+            onFashionChange={updateFashionSettings}
+            onSelectFashionRegion={(regionId) =>
+              canvasRef.current?.selectFashionRegion(regionId)
+            }
             assets={catalogAssets}
             customAssets={customAssets}
             onPlaceAsset={placeAsset}
             onDeleteCustomAsset={deleteCustomAsset}
             onCreateAsset={createAsset}
+            onCreateAssetsFromImage={createAssetsFromImage}
+            onAddCreatedAsset={addCreatedAssetToCloset}
+            onDismissCreatedAsset={dismissCreatedAsset}
             creatingAsset={creatingAsset}
             assetProgress={assetGeneration.progress}
-            createdAsset={createdAsset}
+            createdAssets={createdAssets}
+            createdSourceImage={createdSourceImage}
+            createdSourceName={createdSourceName}
+            materializingFashion={materializingFashion}
+            fashionArtifactProgress={fashionArtifactGeneration.progress}
+            fashionArtifacts={fashionArtifacts}
+            onAddFashionArtifact={addFashionArtifactToCloset}
+            onDismissFashionArtifact={dismissFashionArtifact}
             apiConfigured={assetApiConfigured}
             hasPortrait={Boolean(currentImage)}
+            disabled={generating}
           />
         </div>
       </main>
+
+      {generating && (
+        <div
+          className={styles.generationInteractionLock}
+          aria-hidden="true"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => event.preventDefault()}
+        />
+      )}
 
       {toast && (
         <div className={`${styles.toast} ${styles[`toast${toast.tone}`]}`} key={toast.id}>

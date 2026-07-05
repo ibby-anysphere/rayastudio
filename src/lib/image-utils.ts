@@ -1,11 +1,15 @@
 import type { ImageAspectRatio } from "@/lib/studio-types";
 
 export interface PreparedImage {
-  dataUrl: string;
+  blob: Blob;
   width: number;
   height: number;
   name: string;
 }
+
+const SUPPORTED_UPLOAD_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+const MAX_UPLOAD_SIZE = 24 * 1024 * 1024;
+const MAX_ARTIFACT_UPLOAD_SIZE = 3.8 * 1024 * 1024;
 
 export function loadHtmlImage(source: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -17,20 +21,34 @@ export function loadHtmlImage(source: string): Promise<HTMLImageElement> {
   });
 }
 
-export async function prepareUpload(file: File): Promise<PreparedImage> {
-  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+function validateImageUpload(file: File) {
+  if (!SUPPORTED_UPLOAD_TYPES.has(file.type)) {
     throw new Error("Choose a JPG, PNG, or WebP image");
   }
 
-  if (file.size > 24 * 1024 * 1024) {
+  if (file.size > MAX_UPLOAD_SIZE) {
     throw new Error("Choose an image smaller than 24 MB");
   }
+}
+
+async function rasterizeUpload(
+  file: File,
+  {
+    maxDimension,
+    quality,
+    fallbackName,
+  }: {
+    maxDimension: number;
+    quality: number;
+    fallbackName: string;
+  },
+): Promise<PreparedImage> {
+  validateImageUpload(file);
 
   const objectUrl = URL.createObjectURL(file);
 
   try {
     const image = await loadHtmlImage(objectUrl);
-    const maxDimension = 2048;
     const ratio = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
     const width = Math.max(1, Math.round(image.naturalWidth * ratio));
     const height = Math.max(1, Math.round(image.naturalHeight * ratio));
@@ -47,15 +65,40 @@ export async function prepareUpload(file: File): Promise<PreparedImage> {
     context.imageSmoothingQuality = "high";
     context.drawImage(image, 0, 0, width, height);
 
-    return {
-      dataUrl: canvas.toDataURL("image/jpeg", 0.93),
-      width,
-      height,
-      name: file.name.replace(/\.[^.]+$/, "") || "Untitled portrait",
-    };
+    try {
+      return {
+        blob: await canvasToBlob(canvas, "image/jpeg", quality),
+        width,
+        height,
+        name: file.name.replace(/\.[^.]+$/, "") || fallbackName,
+      };
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   } finally {
     URL.revokeObjectURL(objectUrl);
   }
+}
+
+export function prepareUpload(file: File): Promise<PreparedImage> {
+  return rasterizeUpload(file, {
+    maxDimension: 2048,
+    quality: 0.93,
+    fallbackName: "Untitled portrait",
+  });
+}
+
+export async function prepareArtifactUpload(file: File): Promise<PreparedImage> {
+  const prepared = await rasterizeUpload(file, {
+    maxDimension: 1800,
+    quality: 0.86,
+    fallbackName: "Artifact reference",
+  });
+  if (prepared.blob.size > MAX_ARTIFACT_UPLOAD_SIZE) {
+    throw new Error("Choose a less detailed image or crop it closer to the products");
+  }
+  return prepared;
 }
 
 export async function dataUrlToFile(dataUrl: string, filename: string): Promise<File> {
@@ -109,6 +152,39 @@ export async function recommendedAspectRatio(
   );
 }
 
+export async function createImageThumbnail(
+  source: Blob,
+  maxDimension = 360,
+): Promise<string> {
+  const objectUrl = URL.createObjectURL(source);
+
+  try {
+    const image = await loadHtmlImage(objectUrl);
+    const scale = Math.min(
+      1,
+      maxDimension / Math.max(1, image.naturalWidth, image.naturalHeight),
+    );
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Could not prepare the history preview");
+
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    try {
+      return canvas.toDataURL("image/webp", 0.72);
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export async function assetSourceToPngFile(
   source: string,
   filename: string,
@@ -133,17 +209,75 @@ export async function assetSourceToPngFile(
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
-  const blob = await canvasToBlob(canvas, "image/png");
-  return new File([blob], filename, { type: "image/png" });
+  try {
+    const blob = await canvasToBlob(canvas, "image/png");
+    return new File([blob], filename, { type: "image/png" });
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
 }
 
-export function downloadDataUrl(dataUrl: string, filename: string) {
+export type ImageSaveResult = "shared" | "downloaded" | "cancelled";
+
+export async function saveImageToDevice(
+  source: string,
+  filenameBase: string,
+): Promise<ImageSaveResult> {
+  const response = await fetch(source);
+  if (!response.ok) throw new Error("The photo could not be prepared for download");
+
+  const blob = await response.blob();
+  if (!blob.size || !blob.type.startsWith("image/")) {
+    throw new Error("The photo is not in a downloadable image format");
+  }
+
+  const extension =
+    blob.type === "image/jpeg"
+      ? "jpg"
+      : blob.type === "image/png"
+        ? "png"
+        : blob.type === "image/webp"
+          ? "webp"
+          : "jpg";
+  const filename = `${filenameBase.replace(/\.[a-z0-9]+$/i, "")}.${extension}`;
+  const file = new File([blob], filename, {
+    type: blob.type,
+    lastModified: Date.now(),
+  });
+  const mobileDevice =
+    navigator.maxTouchPoints > 0 &&
+    /Android|iPad|iPhone|iPod|Mobile/i.test(navigator.userAgent);
+  const canShareFile =
+    mobileDevice &&
+    typeof navigator.share === "function" &&
+    typeof navigator.canShare === "function" &&
+    navigator.canShare({ files: [file] });
+
+  if (canShareFile) {
+    try {
+      await navigator.share({
+        files: [file],
+        title: "RIYA photo",
+      });
+      return "shared";
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return "cancelled";
+      }
+      // Fall back to a normal download if the device share sheet fails.
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = dataUrl;
+  link.href = objectUrl;
   link.download = filename;
   document.body.appendChild(link);
   link.click();
   link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000);
+  return "downloaded";
 }
 
 export function canvasToBlob(

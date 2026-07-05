@@ -11,10 +11,24 @@ import {
   type GeminiRenderMode,
 } from "@/lib/gemini-image";
 import {
+  artifactizeImage,
+  materializeFashionArtifacts,
+  NoArtifactsFoundError,
+} from "@/lib/openai-artifacts";
+import {
+  fashionCategory,
+  fashionMaterial,
+  fashionPattern,
+} from "@/lib/fashion-catalog";
+import {
+  MAX_FASHION_LAYERS,
   MAX_INPUT_IMAGES,
   MAX_MAKEUP_LAYERS,
   MAX_WARDROBE_REFERENCES,
   type AssetCategory,
+  type FashionCategory,
+  type FashionMaterialId,
+  type FashionPatternId,
   type GenerationIntent,
   type MakeupProductId,
 } from "@/lib/studio-types";
@@ -25,6 +39,10 @@ export const maxDuration = 300;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const OPENAI_ASSET_MODEL =
   process.env.OPENAI_ASSET_MODEL || "gpt-image-1.5";
+const OPENAI_VISION_MODEL =
+  process.env.OPENAI_VISION_MODEL || "gpt-5.4-nano";
+const OPENAI_FASHION_GROUPING_MODEL =
+  process.env.OPENAI_FASHION_GROUPING_MODEL || "gpt-5.4-mini";
 const ALLOWED_CATEGORIES = new Set<AssetCategory>([
   "jewelry",
   "eyewear",
@@ -38,8 +56,37 @@ const ALLOWED_MAKEUP_PRODUCTS = new Set<MakeupProductId>([
   "eyeshadow",
   "eyeliner",
 ]);
+const ALLOWED_FASHION_CATEGORIES = new Set<FashionCategory>([
+  "auto",
+  "top",
+  "dress",
+  "skirt",
+  "pants",
+  "outerwear",
+  "bag",
+  "shoes",
+  "accessory",
+]);
+const ALLOWED_FASHION_MATERIALS = new Set<FashionMaterialId>([
+  "cotton",
+  "denim",
+  "silk",
+  "cashmere",
+  "leather",
+  "sequins",
+]);
+const ALLOWED_FASHION_PATTERNS = new Set<FashionPatternId>([
+  "solid",
+  "stripes",
+  "polka-dots",
+  "hearts",
+  "stars",
+  "floral",
+]);
 const HEX_COLOR = /^#[0-9a-f]{6}$/i;
 const MAX_FILE_SIZE = 24 * 1024 * 1024;
+const MAX_ARTIFACT_SOURCE_SIZE = 4 * 1024 * 1024;
+const MAX_ARTIFACT_RESPONSE_CHARS = 4_000_000;
 const MAX_REQUEST_SIZE = 14 * 1024 * 1024;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT = 12;
@@ -95,12 +142,20 @@ function isImageFile(value: FormDataEntryValue | null): value is File {
   );
 }
 
+function isArtifactSource(value: FormDataEntryValue | null): value is File {
+  return isImageFile(value) && value.size <= MAX_ARTIFACT_SOURCE_SIZE;
+}
+
 function safeIntent(raw: FormDataEntryValue | null): GenerationIntent | null {
   if (typeof raw !== "string" || raw.length > 20_000) return null;
 
   try {
     const parsed = JSON.parse(raw) as Partial<GenerationIntent>;
-    if (!Array.isArray(parsed.makeupLayers) || !Array.isArray(parsed.placedAssets)) {
+    if (
+      !Array.isArray(parsed.makeupLayers) ||
+      !Array.isArray(parsed.fashionLayers) ||
+      !Array.isArray(parsed.placedAssets)
+    ) {
       return null;
     }
 
@@ -128,8 +183,42 @@ function safeIntent(raw: FormDataEntryValue | null): GenerationIntent | null {
       makeupLayers.push({ product: layer.product, colors });
     }
 
+    const fashionLayers: GenerationIntent["fashionLayers"] = [];
+    for (const layer of parsed.fashionLayers.slice(0, MAX_FASHION_LAYERS)) {
+      if (
+        !layer ||
+        (layer.kind !== "filled-region" && layer.kind !== "outline") ||
+        !ALLOWED_FASHION_CATEGORIES.has(layer.category) ||
+        !ALLOWED_FASHION_MATERIALS.has(layer.material) ||
+        !ALLOWED_FASHION_PATTERNS.has(layer.pattern) ||
+        typeof layer.color !== "string" ||
+        (!HEX_COLOR.test(layer.color) && layer.color !== "rainbow") ||
+        !layer.bounds ||
+        typeof layer.bounds.x !== "number" ||
+        typeof layer.bounds.y !== "number" ||
+        typeof layer.bounds.width !== "number" ||
+        typeof layer.bounds.height !== "number"
+      ) {
+        continue;
+      }
+      fashionLayers.push({
+        kind: layer.kind,
+        category: layer.category,
+        material: layer.material,
+        pattern: layer.pattern,
+        color: layer.color.toLowerCase(),
+        bounds: {
+          x: Math.min(1, Math.max(0, layer.bounds.x)),
+          y: Math.min(1, Math.max(0, layer.bounds.y)),
+          width: Math.min(1, Math.max(0.01, layer.bounds.width)),
+          height: Math.min(1, Math.max(0.01, layer.bounds.height)),
+        },
+      });
+    }
+
     return {
       makeupLayers,
+      fashionLayers,
       placedAssets: parsed.placedAssets.slice(0, 12).flatMap((asset) => {
         if (
           !asset ||
@@ -211,10 +300,15 @@ interface MakeupLayerLayout {
   index: number;
 }
 
+type FashionLayerLayout = GenerationIntent["fashionLayers"][number] & {
+  index: number;
+};
+
 interface InputLayout {
   sourceIndex: number;
   contextualGuideIndex?: number;
   makeupLayers: MakeupLayerLayout[];
+  fashionLayers: FashionLayerLayout[];
 }
 
 function physicalIntegrationRule(
@@ -268,10 +362,31 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
             )} degrees.${proportions}${reference} ${physicalIntegrationRule(asset)}`;
           })
           .join("\n");
+  const fashionDesigns =
+    layout.fashionLayers.length === 0
+      ? "No hand-drawn fashion shapes were requested."
+      : layout.fashionLayers
+          .map((layer, index) => {
+            const category = fashionCategory(layer.category);
+            const material = fashionMaterial(layer.material);
+            const pattern = fashionPattern(layer.pattern);
+            const centerX = layer.bounds.x + layer.bounds.width / 2;
+            const centerY = layer.bounds.y + layer.bounds.height / 2;
+            const shapeInstruction =
+              layer.kind === "outline"
+                ? "The user supplied an outline rather than a fill; infer and close the intended interior conservatively from the drawn contour."
+                : "The colored region is the intended outer silhouette and coverage.";
+            const categoryInstruction =
+              layer.category === "auto"
+                ? "Infer the intended garment or accessory type from the silhouette, body location, pose, and surrounding strokes; do not force it into a preset category."
+                : `Interpret it specifically as a ${category.label.toLowerCase()}.`;
+            return `${index + 1}. Input image ${layer.index}: a hand-drawn ${category.label.toLowerCase()} in ${material.label.toLowerCase()} (${material.prompt}), colored ${layer.color}, with ${pattern.prompt}. ${categoryInstruction} ${shapeInstruction} It occupies the ${describePosition(centerX, centerY)} and roughly ${Math.round(layer.bounds.width * 100)}% × ${Math.round(layer.bounds.height * 100)}% of the photograph.`;
+          })
+          .join("\n");
 
   const sourceHierarchy = `- Input image ${layout.sourceIndex} is the clean, current accepted photograph immediately before this edit. It already contains every previously accepted change and is the sole source of truth for identity, face, skin, body, pose, crop, camera, lighting, environment, and existing styling.`;
   const contextualGuideHierarchy = layout.contextualGuideIndex
-    ? `- Input image ${layout.contextualGuideIndex} is a contextual after-guide made from the current photograph with translucent product-colored strokes and artifact proxies. Use it only to understand anatomical context, the combined placement preview, and each piece's approximate position, scale, rotation, stretched proportions, silhouette, and front/behind relationships. The separate labeled makeup layers below are authoritative for product meaning. Never copy guide strokes, transparency, pasted edges, lighting, or accidental facial overlap.`
+    ? `- Input image ${layout.contextualGuideIndex} is a contextual after-guide made from the current photograph with translucent makeup, hand-drawn fashion, and artifact proxies. Use it only to understand anatomical context, combined placement, approximate silhouette, scale, rotation, stretched proportions, and front/behind relationships. The separate labeled instruction maps below are authoritative for meaning. Never copy guide strokes, transparency, pasted edges, lighting, or accidental facial overlap.`
     : "- There is no contextual after-guide for this edit.";
   const makeupGuideHierarchy = layout.makeupLayers.length
     ? layout.makeupLayers
@@ -281,9 +396,20 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
         })
         .join("\n")
     : "- There is no makeup instruction map for this edit.";
+  const fashionGuideHierarchy = layout.fashionLayers.length
+    ? layout.fashionLayers
+        .map((layer) => {
+          const category = fashionCategory(layer.category);
+          const material = fashionMaterial(layer.material);
+          const pattern = fashionPattern(layer.pattern);
+          return `- Input image ${layer.index} is an isolated FASHION SKETCH map for one ${category.label.toUpperCase()} shape, aligned edge-for-edge with input image ${layout.sourceIndex}. White means no change. The ${layer.color} ${layer.kind === "outline" ? "linework" : "filled/patterned region"} communicates the user's requested silhouette and coverage. Rebuild it as real ${material.label.toLowerCase()} with ${pattern.label.toLowerCase()} styling; never paste the map's pixels.`;
+        })
+        .join("\n")
+    : "- There is no hand-drawn fashion instruction map for this edit.";
   const localEdit = Boolean(
     layout.contextualGuideIndex ||
       layout.makeupLayers.length ||
+      layout.fashionLayers.length ||
       intent.placedAssets.length,
   );
   const beautyInterpretation = layout.makeupLayers.length
@@ -294,10 +420,18 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
         })
         .join("\n")
     : "Preserve the source image's existing makeup exactly. Do not invent new makeup or face paint.";
+  const fashionInterpretation = layout.fashionLayers.length
+    ? `- Treat the user's rough contour as design intent, not finished artwork. Smooth hand wobble into a deliberate couture cut, bridge tiny accidental gaps, preserve intentional corners and unusual proportions, and remove every trace of digital linework.
+- The authored silhouette is authoritative. If it overlaps existing clothing, locally replace or recut that clothing only where needed to realize the new shape; do not simply tint the old garment.
+- Reconstruct each named material physically: correct thickness, weave or pile, seams, hems, folds, tension, gravity, highlights, and contact shadows. Make the named print part of the textile so it follows folds, perspective, and occlusion.
+- Keep separate maps as separate design regions. Do not spread one region's color, fabric, or print into another.
+- Fit tops, dresses, skirts, pants, and outerwear around the subject's real anatomy and pose. Build bags, shoes, and accessories as coherent three-dimensional objects attached or held at the nearest plausible location.
+- A color value is the intended textile color, not a translucent overlay. Match it faithfully while relighting it under the photograph's real illumination.`
+    : "Preserve all existing clothing and accessories unless a separate wardrobe piece explicitly changes them.";
   const editScope = localEdit
     ? `SURGICAL EDIT SCOPE
 - This is a localized edit, not a request to regenerate or reinterpret the photograph.
-- Change only the pixels needed to integrate the requested makeup or pieces.
+- Change only the pixels needed to integrate the requested makeup, hand-drawn fashion, or pieces.
 - Everywhere else, reproduce input image ${layout.sourceIndex} exactly: same background detail, face, skin texture, existing hair and clothing, lighting, exposure, color, grain, sharpness, and composition. Do not repaint, relight, smooth, stylize, or replace untouched areas.
 - If an addition overlaps the face in the contextual after-guide, recover the unobstructed face from input image ${layout.sourceIndex} and fit the addition naturally around it.`
     : `NO-OP EDIT SCOPE
@@ -310,6 +444,7 @@ INPUT HIERARCHY
 ${sourceHierarchy}
 ${contextualGuideHierarchy}
 ${makeupGuideHierarchy}
+${fashionGuideHierarchy}
 - Every remaining input image is an isolated artifact design reference. It defines what a requested piece should look like, not how its 2D pixels should be pasted.
 
 ${editScope}
@@ -317,10 +452,16 @@ ${editScope}
 REQUESTED PIECES
 ${pieces}
 
+HAND-DRAWN FASHION DESIGNS
+${fashionDesigns}
+
 BEAUTY INTERPRETATION
 ${beautyInterpretation}
 - Product labels outrank color assumptions: a plum mark in an EYELINER layer is eyeliner, while the same hue in an EYESHADOW layer is eyeshadow.
 - Treat each white map as a semantic mask, not a visual layer to paste. Apply only the named cosmetic, respect anatomical boundaries, preserve real skin and hair detail, and leave no white background, halo, guide edge, or digital stroke texture.
+
+FASHION SKETCH INTERPRETATION
+${fashionInterpretation}
 
 MANDATORY 2D-TO-3D RECONSTRUCTION
 - Recreate every requested piece from scratch as a physically present three-dimensional object or hairstyle in the scene. Never paste, decal, sticker, or simply blend the reference pixels onto the portrait.
@@ -370,6 +511,38 @@ function requestedAspectRatio(form: FormData): GeminiAspectRatio {
     : "1:1";
 }
 
+const ASSET_CATEGORY_PATTERNS: Array<{
+  category: Exclude<AssetCategory, "accessory">;
+  pattern: RegExp;
+}> = [
+  {
+    category: "hair",
+    pattern:
+      /\b(hair|hairstyle|haircut|wig|bangs?|fringe|braids?|bob|curls?|ponytail|bun|updo|locs?|dreadlocks?)\b/i,
+  },
+  {
+    category: "eyewear",
+    pattern: /\b(eye\s?wear|glasses|sunglasses|goggles|spectacles|frames|monocle)\b/i,
+  },
+  {
+    category: "jewelry",
+    pattern:
+      /\b(jewelry|jewel|earrings?|necklace|chain|pendant|choker|bracelet|bangle|ring|brooch|tiara|crown|anklet|cufflinks?|piercing)\b/i,
+  },
+  {
+    category: "garment",
+    pattern:
+      /\b(garment|clothing|outfit|dress|gown|skirt|shirts?|blouse|tops?|tee|t-shirt|pants|trousers|jeans|shorts|suit|jacket|coat|blazer|sweater|hoodie|cardigan|corset|bodysuit|jumpsuit|romper|vest|robe|cape|kimono|lingerie|swimsuit|bikini|uniform|sari|saree|lehenga)\b/i,
+  },
+];
+
+function inferAssetCategory(description: string): AssetCategory {
+  return (
+    ASSET_CATEGORY_PATTERNS.find(({ pattern }) => pattern.test(description))?.category ??
+    "accessory"
+  );
+}
+
 function assetGenerationPrompt(
   description: string,
   category: AssetCategory,
@@ -384,7 +557,7 @@ function assetGenerationPrompt(
           ? "fashion jewelry piece"
           : category === "eyewear"
             ? "eyewear product"
-            : "fashion accessory";
+            : "physical object or wearable accessory";
 
   return `
 Create exactly one standalone ${subject} as a premium retail product cutout.
@@ -453,7 +626,7 @@ function providerError(error: unknown, provider: "Gemini" | "OpenAI") {
         return errorResponse(
           400,
           `The design was blocked by ${provider}'s safety filter`,
-          "Describe only the garment's material, color, cut, construction, and embellishments.",
+          "Use a clear product image or describe only the item's visible design details.",
         );
       }
       return errorResponse(
@@ -504,7 +677,11 @@ export async function POST(request: Request) {
   }
 
   const mode = form.get("mode");
-  if (mode === "asset" && !process.env.OPENAI_API_KEY) {
+  const isOpenAIAssetMode =
+    mode === "asset" ||
+    mode === "artifactize" ||
+    mode === "fashion-artifactize";
+  if (isOpenAIAssetMode && !process.env.OPENAI_API_KEY) {
     return errorResponse(
       503,
       "Artifact model is not connected",
@@ -521,7 +698,13 @@ export async function POST(request: Request) {
   const renderMode = requestedRenderMode(form);
   const aspectRatio = requestedAspectRatio(form);
   const selectedModel =
-    mode === "asset" ? OPENAI_ASSET_MODEL : geminiModelForMode(renderMode);
+    isOpenAIAssetMode
+      ? mode === "artifactize"
+        ? `${OPENAI_VISION_MODEL} + ${OPENAI_ASSET_MODEL}`
+        : mode === "fashion-artifactize"
+          ? `${OPENAI_FASHION_GROUPING_MODEL} + ${OPENAI_ASSET_MODEL}`
+          : OPENAI_ASSET_MODEL
+      : geminiModelForMode(renderMode);
   const imageSize = geminiImageSizeForMode(renderMode);
   const requestId = randomUUID().slice(0, 8);
   const startedAt = Date.now();
@@ -530,24 +713,168 @@ export async function POST(request: Request) {
   );
 
   try {
+    if (mode === "fashion-artifactize") {
+      const source = form.get("source");
+      const guideEntries = form.getAll("fashionLayers");
+      const intent = safeIntent(form.get("intent"));
+      if (!isArtifactSource(source) || !intent) {
+        return errorResponse(
+          400,
+          "The finished look could not be prepared",
+          "Use a valid finished JPG, PNG, or WebP image and try again.",
+        );
+      }
+      if (
+        intent.fashionLayers.length === 0 ||
+        guideEntries.length > MAX_FASHION_LAYERS ||
+        guideEntries.length !== intent.fashionLayers.length ||
+        !guideEntries.every(isArtifactSource)
+      ) {
+        return errorResponse(
+          400,
+          "The fashion drawing layers are incomplete",
+          "Keep the finished drawing layers aligned with the imagined look.",
+        );
+      }
+
+      const result = await materializeFashionArtifacts({
+        source,
+        guides: guideEntries as File[],
+        instructions: intent.fashionLayers,
+        imageModel: OPENAI_ASSET_MODEL,
+        groupingModel: OPENAI_FASHION_GROUPING_MODEL,
+        signal: request.signal,
+      });
+      let responseChars = 0;
+      const deliverableArtifacts = result.artifacts.filter((artifact) => {
+        if (
+          responseChars + artifact.base64.length >
+          MAX_ARTIFACT_RESPONSE_CHARS
+        ) {
+          return false;
+        }
+        responseChars += artifact.base64.length;
+        return true;
+      });
+      const payloadOmissions =
+        result.artifacts.length - deliverableArtifacts.length;
+      if (deliverableArtifacts.length === 0) {
+        return errorResponse(
+          502,
+          "The closet pieces were too large to deliver",
+          "Your imagined look is safe. Try materializing fewer drawn pieces at once.",
+        );
+      }
+
+      console.info(
+        `[RIYA ${requestId}] materialized ${deliverableArtifacts.length}/${result.detectedCount} grouped drawn pieces in ${Date.now() - startedAt}ms · ${OPENAI_FASHION_GROUPING_MODEL} + ${OPENAI_ASSET_MODEL}`,
+      );
+      return Response.json(
+        {
+          artifacts: deliverableArtifacts.map((artifact) => ({
+            image: imageDataUrl(artifact.base64, artifact.mimeType),
+            name: artifact.name,
+            category: artifact.category,
+            prompt: artifact.description,
+          })),
+          detectedCount: result.detectedCount,
+          failedCount: result.failedCount + payloadOmissions,
+          model: OPENAI_ASSET_MODEL,
+          groupingModel: OPENAI_FASHION_GROUPING_MODEL,
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
+    if (mode === "artifactize") {
+      const source = form.get("source");
+      if (!isArtifactSource(source)) {
+        return errorResponse(
+          400,
+          "Choose a valid reference image",
+          "Upload one JPG, PNG, or WebP image smaller than 4 MB.",
+        );
+      }
+
+      let result;
+      try {
+        result = await artifactizeImage({
+          source,
+          imageModel: OPENAI_ASSET_MODEL,
+          visionModel: OPENAI_VISION_MODEL,
+          signal: request.signal,
+        });
+      } catch (error) {
+        if (error instanceof NoArtifactsFoundError) {
+          return errorResponse(
+            422,
+            "No reusable artifacts were found",
+            "Try an image with a clearly visible garment, accessory, hairstyle, or object.",
+          );
+        }
+        throw error;
+      }
+
+      let responseChars = 0;
+      const deliverableArtifacts = result.artifacts.filter((artifact) => {
+        if (
+          responseChars + artifact.base64.length >
+          MAX_ARTIFACT_RESPONSE_CHARS
+        ) {
+          return false;
+        }
+        responseChars += artifact.base64.length;
+        return true;
+      });
+      const payloadOmissions =
+        result.artifacts.length - deliverableArtifacts.length;
+      if (deliverableArtifacts.length === 0) {
+        return errorResponse(
+          502,
+          "The generated artifact was too large to deliver",
+          "Try a tighter crop around the product.",
+        );
+      }
+      if (payloadOmissions > 0) {
+        console.warn(
+          `[RIYA ${requestId}] omitted ${payloadOmissions} artifact outputs to stay within the response budget`,
+        );
+      }
+
+      console.info(
+        `[RIYA ${requestId}] artifactized ${deliverableArtifacts.length}/${result.detectedCount} products in ${Date.now() - startedAt}ms · ${OPENAI_ASSET_MODEL}`,
+      );
+      return Response.json(
+        {
+          artifacts: deliverableArtifacts.map((artifact) => ({
+            image: imageDataUrl(artifact.base64, artifact.mimeType),
+            name: artifact.name,
+            category: artifact.category,
+            prompt: artifact.description,
+          })),
+          detectedCount: result.detectedCount,
+          failedCount: result.failedCount + payloadOmissions,
+          model: OPENAI_ASSET_MODEL,
+        },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+
     if (mode === "asset") {
       const promptValue = form.get("prompt");
-      const categoryValue = form.get("category");
       if (
         typeof promptValue !== "string" ||
-        promptValue.trim().length < 8 ||
-        promptValue.length > 800 ||
-        typeof categoryValue !== "string" ||
-        !ALLOWED_CATEGORIES.has(categoryValue as AssetCategory)
+        promptValue.trim().length < 3 ||
+        promptValue.length > 2_000
       ) {
         return errorResponse(
           400,
           "Describe the piece in more detail",
-          "Use 8–800 characters and choose a supported piece type.",
+          "Use 3–2,000 characters.",
         );
       }
 
-      const category = categoryValue as AssetCategory;
+      const category = inferAssetCategory(promptValue);
       const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const generateAsset = (conservative = false) =>
         openai.images.generate({
@@ -581,6 +908,7 @@ export async function POST(request: Request) {
       return Response.json(
         {
           image: imageDataUrl(base64, "image/png"),
+          category,
           model: OPENAI_ASSET_MODEL,
         },
         { headers: { "Cache-Control": "no-store" } },
@@ -594,6 +922,7 @@ export async function POST(request: Request) {
     const sourceEntry = form.get("source");
     const contextualGuideEntry = form.get("contextualGuide");
     const makeupLayerEntries = form.getAll("makeupLayers");
+    const fashionLayerEntries = form.getAll("fashionLayers");
     const intent = safeIntent(form.get("intent"));
     if (!isImageFile(sourceEntry) || !intent) {
       return errorResponse(
@@ -620,6 +949,17 @@ export async function POST(request: Request) {
         "Clear the beauty strokes, repaint the requested products, and try again.",
       );
     }
+    if (
+      fashionLayerEntries.length > MAX_FASHION_LAYERS ||
+      fashionLayerEntries.length !== intent.fashionLayers.length ||
+      !fashionLayerEntries.every(isImageFile)
+    ) {
+      return errorResponse(
+        400,
+        "A fashion sketch layer is invalid",
+        "Return to Draw anything, refill the requested shapes, and try again.",
+      );
+    }
     const referenceEntries = form.getAll("references");
     if (
       referenceEntries.length > MAX_WARDROBE_REFERENCES ||
@@ -635,12 +975,13 @@ export async function POST(request: Request) {
       1 +
       Number(isImageFile(contextualGuideEntry)) +
       makeupLayerEntries.length +
+      fashionLayerEntries.length +
       referenceEntries.length;
     if (totalInputCount > MAX_INPUT_IMAGES) {
       return errorResponse(
         400,
         "Too many visual references",
-        `Use no more than ${MAX_INPUT_IMAGES} combined source, guide, makeup, and wardrobe images.`,
+        `Use no more than ${MAX_INPUT_IMAGES} combined source, guide, makeup, fashion, and wardrobe images.`,
       );
     }
 
@@ -660,6 +1001,15 @@ export async function POST(request: Request) {
         index: files.length,
       });
     }
+    const fashionLayers: FashionLayerLayout[] = [];
+    for (const [index, entry] of fashionLayerEntries.entries()) {
+      const layer = intent.fashionLayers[index];
+      files.push(entry as File);
+      fashionLayers.push({
+        ...layer,
+        index: files.length,
+      });
+    }
     files.push(...(referenceEntries as File[]));
 
     const result = await generateGeminiImage({
@@ -669,6 +1019,7 @@ export async function POST(request: Request) {
         sourceIndex,
         contextualGuideIndex,
         makeupLayers,
+        fashionLayers,
       }),
       aspectRatio,
       outputMimeType: "image/jpeg",
@@ -677,19 +1028,19 @@ export async function POST(request: Request) {
     console.info(
       `[RIYA ${requestId}] edit completed in ${Date.now() - startedAt}ms · ${result.model} · ${files.length} inputs`,
     );
-    return Response.json(
-      {
-        image: imageDataUrl(result.base64, result.mimeType),
-        model: result.model,
-        interactionId: result.interactionId,
+    return new Response(Buffer.from(result.base64, "base64"), {
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Type": result.mimeType,
+        "X-Riya-Model": result.model,
+        "X-Riya-Interaction": result.interactionId,
       },
-      { headers: { "Cache-Control": "no-store" } },
-    );
+    });
   } catch (error) {
     console.error(
       `[RIYA ${requestId}] ${String(mode)} failed after ${Date.now() - startedAt}ms`,
       error instanceof Error ? error.message : error,
     );
-    return providerError(error, mode === "asset" ? "OpenAI" : "Gemini");
+    return providerError(error, isOpenAIAssetMode ? "OpenAI" : "Gemini");
   }
 }

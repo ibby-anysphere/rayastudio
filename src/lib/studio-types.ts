@@ -1,18 +1,45 @@
 // Maximum number of images the portrait edit endpoint accepts in a single
-// request: the source photo + contextual guide + makeup layers + wardrobe
-// references combined. Shared by the client budget guard and the server.
+// request: the source photo + contextual guide + makeup layers + fashion
+// sketch layers + wardrobe references combined. Shared by the client budget
+// guard and the server.
 export const MAX_INPUT_IMAGES = 14;
 
 // Per-type sub-caps enforced by the edit endpoint. Wardrobe references and
-// makeup layers each have their own ceiling in addition to the combined image
-// budget above, and they are the binding limits before the total is reached.
+// authored guide layers each have their own ceiling in addition to the
+// combined image budget above.
 export const MAX_WARDROBE_REFERENCES = 8;
 export const MAX_MAKEUP_LAYERS = 4;
+export const MAX_FASHION_LAYERS = 4;
 
 export type StudioTab = "makeup" | "wardrobe" | "create";
-export type CanvasTool = "select" | "brush" | "eraser";
+export type ClosetMode = "pieces" | "draw";
+export type CanvasTool = "brush" | "pencil" | "eraser" | "fill";
 export type AssetCategory = "jewelry" | "eyewear" | "hair" | "garment" | "accessory";
 export type MakeupProductId = "lipstick" | "blush" | "eyeshadow" | "eyeliner";
+export type FashionCategory =
+  | "auto"
+  | "top"
+  | "dress"
+  | "skirt"
+  | "pants"
+  | "outerwear"
+  | "bag"
+  | "shoes"
+  | "accessory";
+export type FashionMaterialId =
+  | "cotton"
+  | "denim"
+  | "silk"
+  | "cashmere"
+  | "leather"
+  | "sequins";
+export type FashionPatternId =
+  | "solid"
+  | "stripes"
+  | "polka-dots"
+  | "hearts"
+  | "stars"
+  | "floral";
 export type RenderMode = "fast" | "max";
 export type ImageAspectRatio =
   | "1:1"
@@ -37,6 +64,13 @@ export interface StudioAsset {
   createdAt?: number;
 }
 
+export interface GeneratedArtifactResult {
+  image: string;
+  name: string;
+  category: AssetCategory;
+  prompt: string;
+}
+
 export interface PlacedAsset {
   instanceId: string;
   asset: StudioAsset;
@@ -53,6 +87,36 @@ export interface BrushSettings {
   color: string;
   size: number;
   opacity: number;
+}
+
+export interface FashionSettings {
+  category: FashionCategory;
+  material: FashionMaterialId;
+  pattern: FashionPatternId;
+  color: string;
+  size: number;
+}
+
+export interface FashionRegionSummary {
+  id: string;
+  category: FashionCategory;
+  material: FashionMaterialId;
+  pattern: FashionPatternId;
+  color: string;
+  bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+}
+
+export interface FashionGuideState {
+  hasMarks: boolean;
+  hasOutline: boolean;
+  canUndo: boolean;
+  selectedRegionId: string | null;
+  regions: FashionRegionSummary[];
 }
 
 export interface MakeupShade {
@@ -77,7 +141,7 @@ export interface MakeupProduct {
 
 export interface HistoryItem {
   id: string;
-  image: string;
+  thumbnail: string;
   label: string;
   createdAt: number;
 }
@@ -86,6 +150,19 @@ export interface GenerationIntent {
   makeupLayers: Array<{
     product: MakeupProductId;
     colors: string[];
+  }>;
+  fashionLayers: Array<{
+    kind: "filled-region" | "outline";
+    category: FashionCategory;
+    material: FashionMaterialId;
+    pattern: FashionPatternId;
+    color: string;
+    bounds: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    };
   }>;
   placedAssets: Array<{
     name: string;

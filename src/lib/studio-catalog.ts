@@ -172,7 +172,7 @@ export const makeupProducts: MakeupProduct[] = [
       { name: "Coral", color: "#d66b5f" },
       { name: "Mulberry", color: "#6f3155" },
       { name: "Brick", color: "#a64c3f" },
-      { name: "Nude rose", color: "#b87972" },
+      { name: "Warm rose", color: "#b87972" },
     ],
     defaultSize: 18,
     minSize: 8,

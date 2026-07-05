@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180" width="320" height="180">
+  <defs>
+    <linearGradient id="gold" x1="0" x2="1">
+      <stop stop-color="#8e6b2d"/>
+      <stop offset=".48" stop-color="#fff0aa"/>
+      <stop offset="1" stop-color="#9a7332"/>
+    </linearGradient>
+    <radialGradient id="diamond">
+      <stop stop-color="#fff"/>
+      <stop offset=".35" stop-color="#e7f7ff"/>
+      <stop offset="1" stop-color="#a9c9d5"/>
+    </radialGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-opacity=".24"/>
+    </filter>
+  </defs>
+  <g fill="none" stroke="url(#gold)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <path d="M34 141c36-14 65-20 126-20s90 6 126 20"/>
+    <path d="M52 132 85 76l29 45 46-92 46 92 29-45 33 56"/>
+    <path d="M85 76c16 7 25 4 29-14 8 22 24 21 46-33 22 54 38 55 46 33 4 18 13 21 29 14"/>
+  </g>
+  <g fill="url(#diamond)" stroke="#d7b867" stroke-width="3">
+    <path d="M160 22c-19 18-21 35 0 52 21-17 19-34 0-52Z"/>
+    <circle cx="84" cy="74" r="9"/>
+    <circle cx="114" cy="61" r="8"/>
+    <circle cx="206" cy="61" r="8"/>
+    <circle cx="236" cy="74" r="9"/>
+    <circle cx="49" cy="132" r="6"/>
+    <circle cx="270" cy="132" r="6"/>
+  </g>
+</svg>

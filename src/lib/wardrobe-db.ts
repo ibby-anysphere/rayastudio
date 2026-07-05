@@ -59,6 +59,25 @@ export async function saveWardrobeAsset(asset: StudioAsset): Promise<void> {
   });
 }
 
+export async function saveWardrobeAssets(assets: StudioAsset[]): Promise<void> {
+  if (assets.length === 0) return;
+  const database = await openWardrobeDb();
+
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    const store = transaction.objectStore(STORE_NAME);
+    for (const asset of assets) store.put(asset);
+    transaction.oncomplete = () => {
+      database.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      database.close();
+      reject(transaction.error ?? new Error("Could not save wardrobe assets"));
+    };
+  });
+}
+
 export async function removeWardrobeAsset(id: string): Promise<void> {
   const database = await openWardrobeDb();
 

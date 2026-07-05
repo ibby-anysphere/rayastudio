@@ -13,15 +13,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RIYA — Your Private AI Atelier",
+  title: "Raya Studio — Imagine Anything",
   description:
-    "Paint makeup, style couture, place accessories, and create one-of-one fashion pieces with AI.",
+    "Create looks, style outfits, and bring anything you imagine to life.",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#271d2d",
+  themeColor: "#3d0533",
   colorScheme: "light",
 };
 
