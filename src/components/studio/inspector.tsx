@@ -86,8 +86,8 @@ interface InspectorProps {
 
 const tabItems: Array<{ id: StudioTab; label: string; icon: typeof Palette }> = [
   { id: "makeup", label: "Beauty", icon: Palette },
-  { id: "wardrobe", label: "Closet", icon: Gem },
   { id: "create", label: "Create", icon: WandSparkles },
+  { id: "wardrobe", label: "Closet", icon: Gem },
 ];
 
 const categoryItems: Array<{ id: "all" | AssetCategory; label: string }> = [
@@ -876,7 +876,7 @@ export function Inspector({
               <div className={styles.fashionStudio}>
                 <section className={styles.fashionControlSection}>
                   <div className={styles.fashionControlHead}>
-                    <span>Fabric</span>
+                    <span>Step 1: Fabric</span>
                   </div>
                   <div className={styles.fashionMaterialGrid} role="radiogroup">
                     {fashionMaterials.map((material) => (
@@ -904,7 +904,7 @@ export function Inspector({
 
                 <section className={styles.fashionControlSection}>
                   <div className={styles.fashionControlHead}>
-                    <span>Print</span>
+                    <span>Step 2: Print</span>
                   </div>
                   <div className={styles.fashionPatternGrid} role="radiogroup">
                     {fashionPatterns.map((pattern) => (
@@ -946,7 +946,7 @@ export function Inspector({
 
                 <section className={styles.fashionControlSection}>
                   <div className={styles.fashionControlHead}>
-                    <span>Color</span>
+                    <span>Step 3: Color</span>
                   </div>
                   <div className={styles.fashionColorGrid} role="radiogroup">
                     {fashionColors.map((swatch) => (
