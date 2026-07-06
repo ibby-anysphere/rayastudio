@@ -71,6 +71,60 @@ export interface GeneratedArtifactResult {
   prompt: string;
 }
 
+export interface ArtifactInventoryItem {
+  id: string;
+  index: number;
+  name: string;
+  category: AssetCategory;
+  prompt: string;
+}
+
+export interface ArtifactExtractionSlot extends ArtifactInventoryItem {
+  status: "extracting" | "complete" | "error";
+  asset?: StudioAsset;
+  error?: string;
+}
+
+export type ArtifactExtractionStreamEvent =
+  | { type: "started" }
+  | {
+      type: "inventory";
+      detectedCount: number;
+      items: ArtifactInventoryItem[];
+    }
+  | {
+      type: "artifact";
+      id: string;
+      index: number;
+      artifact: GeneratedArtifactResult;
+    }
+  | {
+      type: "artifact-error";
+      id: string;
+      index: number;
+      detail: string;
+    }
+  | {
+      type: "complete";
+      detectedCount: number;
+      completedCount: number;
+      failedCount: number;
+    }
+  | {
+      type: "error";
+      error: string;
+      detail: string;
+    };
+
+export interface FashionArtifactJob {
+  id: string;
+  status: "processing" | "complete" | "error";
+  progress: number;
+  artifacts: StudioAsset[];
+  createdAt: number;
+  error?: string;
+}
+
 export interface PlacedAsset {
   instanceId: string;
   asset: StudioAsset;

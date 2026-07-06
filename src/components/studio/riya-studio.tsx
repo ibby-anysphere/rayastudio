@@ -50,10 +50,13 @@ import {
   MAX_INPUT_IMAGES,
   MAX_MAKEUP_LAYERS,
   MAX_WARDROBE_REFERENCES,
+  type ArtifactExtractionSlot,
+  type ArtifactExtractionStreamEvent,
   type AssetCategory,
   type BrushSettings,
   type CanvasTool,
   type ClosetMode,
+  type FashionArtifactJob,
   type FashionGuideState,
   type FashionSettings,
   type GeneratedArtifactResult,
@@ -99,6 +102,15 @@ function holdForReveal(milliseconds = 620) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function fashionJobPercent(elapsedMs: number, estimateMs: number) {
+  const ratio = elapsedMs / Math.max(1, estimateMs);
+  if (ratio <= 0.1) return 4 + (ratio / 0.1) * 12;
+  if (ratio <= 0.45) return 16 + ((ratio - 0.1) / 0.35) * 38;
+  if (ratio <= 0.8) return 54 + ((ratio - 0.45) / 0.35) * 28;
+  if (ratio <= 1) return 82 + ((ratio - 0.8) / 0.2) * 10;
+  return Math.min(98, 92 + 6 * (1 - Math.exp(-(ratio - 1))));
+}
+
 function emptyFashionGuideState(): FashionGuideState {
   return {
     hasMarks: false,
@@ -126,40 +138,98 @@ function isAssetCategory(value: unknown): value is AssetCategory {
   );
 }
 
+function studioAssetFromArtifact(
+  artifact: Partial<GeneratedArtifactResult>,
+  index: number,
+  createdAt: number,
+  fallbackPrompt: string,
+): StudioAsset | null {
+  if (
+    typeof artifact.image !== "string" ||
+    !artifact.image.startsWith("data:image/") ||
+    !isAssetCategory(artifact.category)
+  ) {
+    return null;
+  }
+  const prompt =
+    typeof artifact.prompt === "string" && artifact.prompt.trim()
+      ? artifact.prompt.trim()
+      : fallbackPrompt;
+  const name =
+    typeof artifact.name === "string" && artifact.name.trim()
+      ? artifact.name.trim().slice(0, 80)
+      : pieceNameFromPrompt(prompt);
+  return {
+    id: makeId("custom"),
+    name,
+    category: artifact.category,
+    prompt,
+    src: artifact.image,
+    accent: categoryAccent[artifact.category],
+    custom: true,
+    createdAt: createdAt - index,
+  };
+}
+
 function fashionAssetsFromArtifacts(
   artifacts: Array<Partial<GeneratedArtifactResult>>,
   fallbackPrompt: string,
 ) {
   const createdAt = timestamp();
   return artifacts.flatMap((artifact, index) => {
-    if (
-      typeof artifact.image !== "string" ||
-      !artifact.image.startsWith("data:image/") ||
-      !isAssetCategory(artifact.category)
-    ) {
-      return [];
-    }
-    const prompt =
-      typeof artifact.prompt === "string" && artifact.prompt.trim()
-        ? artifact.prompt.trim()
-        : fallbackPrompt;
-    const name =
-      typeof artifact.name === "string" && artifact.name.trim()
-        ? artifact.name.trim().slice(0, 80)
-        : pieceNameFromPrompt(prompt);
-    return [
-      {
-        id: makeId("custom"),
-        name,
-        category: artifact.category,
-        prompt,
-        src: artifact.image,
-        accent: categoryAccent[artifact.category],
-        custom: true,
-        createdAt: createdAt - index,
-      } satisfies StudioAsset,
-    ];
+    const asset = studioAssetFromArtifact(
+      artifact,
+      index,
+      createdAt,
+      fallbackPrompt,
+    );
+    return asset ? [asset] : [];
   });
+}
+
+async function readArtifactExtractionStream(
+  response: Response,
+  onEvent: (event: ArtifactExtractionStreamEvent) => void,
+) {
+  if (!response.body) {
+    throw new Error("The browser could not read the extraction stream");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const emitLine = (line: string) => {
+    if (!line.trim()) return;
+    let event: ArtifactExtractionStreamEvent;
+    try {
+      event = JSON.parse(line) as ArtifactExtractionStreamEvent;
+    } catch {
+      throw new Error("The extraction stream returned an invalid update");
+    }
+    if (!event || typeof event !== "object" || !("type" in event)) {
+      throw new Error("The extraction stream returned an invalid update");
+    }
+    onEvent(event);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex >= 0) {
+        emitLine(buffer.slice(0, newlineIndex));
+        buffer = buffer.slice(newlineIndex + 1);
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
+    buffer += decoder.decode();
+    emitLine(buffer);
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function defaultPlacement(asset: StudioAsset) {
@@ -193,9 +263,10 @@ export function RiyaStudio() {
   const historyFallbackRef = useRef(new Map<string, Blob>());
   const historySelectionRef = useRef(0);
   const revisionCountRef = useRef(0);
+  const artifactExtractionAbortRef = useRef<AbortController | null>(null);
+  const artifactExtractionSlotsRef = useRef<ArtifactExtractionSlot[]>([]);
   const portraitGeneration = useEstimatedProgress();
   const assetGeneration = useEstimatedProgress();
-  const fashionArtifactGeneration = useEstimatedProgress();
 
   const [brandIntroState, setBrandIntroState] = useState<
     "visible" | "leaving" | "hidden"
@@ -239,10 +310,14 @@ export function RiyaStudio() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [customAssets, setCustomAssets] = useState<StudioAsset[]>([]);
   const [createdAssets, setCreatedAssets] = useState<StudioAsset[]>([]);
+  const [artifactExtractionSlots, setArtifactExtractionSlots] = useState<
+    ArtifactExtractionSlot[]
+  >([]);
   const [createdSourceImage, setCreatedSourceImage] = useState<string | null>(null);
   const [createdSourceName, setCreatedSourceName] = useState("");
-  const [fashionArtifacts, setFashionArtifacts] = useState<StudioAsset[]>([]);
-  const [materializingFashion, setMaterializingFashion] = useState(false);
+  const [fashionArtifactJobs, setFashionArtifactJobs] = useState<
+    FashionArtifactJob[]
+  >([]);
   const [generating, setGenerating] = useState(false);
   const [creatingAsset, setCreatingAsset] = useState(false);
   const [renderMode, setRenderMode] = useState<RenderMode>("fast");
@@ -337,6 +412,23 @@ export function RiyaStudio() {
     }
   };
 
+  const replaceArtifactExtractionSlots = (
+    nextSlots: ArtifactExtractionSlot[],
+  ) => {
+    artifactExtractionSlotsRef.current = nextSlots;
+    setArtifactExtractionSlots(nextSlots);
+  };
+
+  const updateArtifactExtractionSlots = (
+    update: (current: ArtifactExtractionSlot[]) => ArtifactExtractionSlot[],
+  ) => {
+    setArtifactExtractionSlots((current) => {
+      const next = update(current);
+      artifactExtractionSlotsRef.current = next;
+      return next;
+    });
+  };
+
   const replaceCurrentImage = (nextImage: string) => {
     const previousImage = currentImageRef.current;
     currentImageRef.current = nextImage;
@@ -423,6 +515,7 @@ export function RiyaStudio() {
 
     return () => {
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      artifactExtractionAbortRef.current?.abort();
       for (const url of imageUrls) URL.revokeObjectURL(url);
       imageUrls.clear();
       historyFallback.clear();
@@ -635,7 +728,7 @@ export function RiyaStudio() {
     setSelectedLayerId((selected) => (selected === instanceId ? null : selected));
   };
 
-  const materializeFashionFromLook = async ({
+  const startFashionMaterialization = ({
     finalBlob,
     fashionGuides,
     intent,
@@ -654,107 +747,143 @@ export function RiyaStudio() {
       return;
     }
 
-    setFashionArtifacts([]);
+    const jobId = makeId("fashion-job");
+    setFashionArtifactJobs((current) => [
+      {
+        id: jobId,
+        status: "processing",
+        progress: 4,
+        artifacts: [],
+        createdAt: timestamp(),
+      },
+      ...current,
+    ]);
     setTab("wardrobe");
     setClosetMode("draw");
-    setMaterializingFashion(true);
-    fashionArtifactGeneration.start("fashion-artifact", fashionGuides.length);
-    let completed = false;
+    const runJob = async () => {
+      const startedAt = performance.now();
+      const estimateMs = 62_000 + Math.max(0, fashionGuides.length - 1) * 7_000;
+      const progressTimer = window.setInterval(() => {
+        const progress = Math.floor(
+          fashionJobPercent(performance.now() - startedAt, estimateMs),
+        );
+        setFashionArtifactJobs((current) =>
+          current.map((job) =>
+            job.id === jobId && job.status === "processing"
+              ? { ...job, progress }
+              : job,
+          ),
+        );
+      }, 250);
 
-    try {
-      const sourceFile = new File(
-        [finalBlob],
-        "finished-look.jpg",
-        { type: finalBlob.type || "image/jpeg" },
-      );
-      const sourceBlob =
-        finalBlob.size <= 3.8 * 1024 * 1024
-          ? finalBlob
-          : (await prepareArtifactUpload(sourceFile)).blob;
-      const sourceType = sourceBlob.type || "image/jpeg";
-      const form = new FormData();
-      form.append("mode", "fashion-artifactize");
-      form.append(
-        "source",
-        new File([sourceBlob], "finished-look.jpg", {
-          type: sourceType,
-        }),
-      );
-      for (const guide of fashionGuides) {
+      try {
+        const sourceFile = new File([finalBlob], "finished-look.jpg", {
+          type: finalBlob.type || "image/jpeg",
+        });
+        const sourceBlob =
+          finalBlob.size <= 3.8 * 1024 * 1024
+            ? finalBlob
+            : (await prepareArtifactUpload(sourceFile)).blob;
+        const sourceType = sourceBlob.type || "image/jpeg";
+        const form = new FormData();
+        form.append("mode", "fashion-artifactize");
         form.append(
-          "fashionLayers",
-          new File([guide.blob], `drawn-piece-${guide.id}.png`, {
-            type: "image/png",
+          "source",
+          new File([sourceBlob], "finished-look.jpg", {
+            type: sourceType,
           }),
         );
-      }
-      form.append("intent", JSON.stringify(intent));
+        for (const guide of fashionGuides) {
+          form.append(
+            "fashionLayers",
+            new File([guide.blob], `drawn-piece-${guide.id}.png`, {
+              type: "image/png",
+            }),
+          );
+        }
+        form.append("intent", JSON.stringify(intent));
 
-      const response = await fetch("/api/image", {
-        method: "POST",
-        body: form,
-      });
-      const data = (await response.json().catch(() => null)) as {
-        artifacts?: Array<Partial<GeneratedArtifactResult>>;
-        detectedCount?: number;
-        failedCount?: number;
-        error?: string;
-        detail?: string;
-      } | null;
-      if (!response.ok) {
-        throw new Error(
-          data?.detail ||
-            data?.error ||
-            "The drawing could not be turned into a closet piece",
+        const response = await fetch("/api/image", {
+          method: "POST",
+          body: form,
+        });
+        const data = (await response.json().catch(() => null)) as {
+          artifacts?: Array<Partial<GeneratedArtifactResult>>;
+          detectedCount?: number;
+          failedCount?: number;
+          error?: string;
+          detail?: string;
+        } | null;
+        if (!response.ok) {
+          throw new Error(
+            data?.detail ||
+              data?.error ||
+              "The drawing could not be turned into a closet piece",
+          );
+        }
+
+        const assets = fashionAssetsFromArtifacts(
+          data?.artifacts ?? [],
+          "Materialized from a hand-drawn fashion design",
         );
-      }
+        if (assets.length === 0) {
+          throw new Error("The closet model did not return a usable piece");
+        }
 
-      const assets = fashionAssetsFromArtifacts(
-        data?.artifacts ?? [],
-        "Materialized from a hand-drawn fashion design",
-      );
-      if (assets.length === 0) {
-        throw new Error("The closet model did not return a usable piece");
+        setFashionArtifactJobs((current) =>
+          current.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  status: "complete",
+                  progress: 100,
+                  artifacts: assets,
+                }
+              : job,
+          ),
+        );
+        const failedCount =
+          typeof data?.failedCount === "number" ? data.failedCount : 0;
+        showToast(
+          failedCount > 0 ? "info" : "success",
+          `${assets.length} closet ${assets.length === 1 ? "piece is" : "pieces are"} ready`,
+          failedCount > 0
+            ? "Keep the pieces you love. One drawing could not be isolated."
+            : "Keep what you love—nothing is added until you choose it.",
+        );
+      } catch (error) {
+        const detail =
+          error instanceof Error
+            ? error.message
+            : "The reusable closet piece can be tried again later.";
+        setFashionArtifactJobs((current) =>
+          current.map((job) =>
+            job.id === jobId
+              ? {
+                  ...job,
+                  status: "error",
+                  progress: 100,
+                  error: detail,
+                }
+              : job,
+          ),
+        );
+        showToast(
+          "info",
+          "Your finished look is safe",
+          `The reusable closet piece paused: ${detail}`,
+        );
+      } finally {
+        window.clearInterval(progressTimer);
       }
+    };
 
-      setFashionArtifacts(assets);
-      fashionArtifactGeneration.complete();
-      completed = true;
-      await holdForReveal(420);
-      const failedCount =
-        typeof data?.failedCount === "number" ? data.failedCount : 0;
-      showToast(
-        failedCount > 0 ? "info" : "success",
-        `${assets.length} closet ${assets.length === 1 ? "piece is" : "pieces are"} ready`,
-        failedCount > 0
-          ? "Keep the pieces you love. One drawing could not be isolated."
-          : "Keep what you love—nothing is added until you choose it.",
-      );
-    } catch (error) {
-      showToast(
-        "info",
-        "Your finished look is safe",
-        error instanceof Error
-          ? `The reusable closet piece paused: ${error.message}`
-          : "The reusable closet piece can be tried again later.",
-      );
-    } finally {
-      if (!completed) fashionArtifactGeneration.cancel();
-      setMaterializingFashion(false);
-    }
+    void runJob();
   };
 
   const applyEdits = async () => {
     if (!currentImage) {
       showToast("info", "Start with a portrait", "Choose a photo to begin your look.");
-      return;
-    }
-    if (materializingFashion) {
-      showToast(
-        "info",
-        "Closet pieces are still finishing",
-        "Wait for the current drawn pieces before imagining another look.",
-      );
       return;
     }
     if (editApiConfigured === false) {
@@ -953,7 +1082,7 @@ export function RiyaStudio() {
         // second, non-blocking-feeling step that uses this final render as the
         // visual authority and the raw maps only to locate each drawn piece.
         setGenerating(false);
-        await materializeFashionFromLook({
+        startFashionMaterialization({
           finalBlob,
           fashionGuides: fashionLayers,
           intent,
@@ -990,6 +1119,7 @@ export function RiyaStudio() {
     }
 
     replaceCreatedSourceImage(null);
+    replaceArtifactExtractionSlots([]);
     setCreatedAssets([]);
     setCreatingAsset(true);
     assetGeneration.start("asset");
@@ -1054,10 +1184,18 @@ export function RiyaStudio() {
       return;
     }
 
+    artifactExtractionAbortRef.current?.abort();
+    const abortController = new AbortController();
+    artifactExtractionAbortRef.current = abortController;
     setCreatingAsset(true);
     assetGeneration.start("asset-upload");
     let completed = false;
     let sourceStaged = false;
+    let inventoryReceived = false;
+    let streamCompleted = false;
+    let completedCount = 0;
+    let detectedCount = 0;
+    let failedCount = 0;
     try {
       const prepared = await prepareArtifactUpload(file);
       replaceCreatedSourceImage(
@@ -1065,6 +1203,7 @@ export function RiyaStudio() {
         prepared.name,
       );
       setCreatedAssets([]);
+      replaceArtifactExtractionSlots([]);
       sourceStaged = true;
 
       const safeName =
@@ -1072,74 +1211,132 @@ export function RiyaStudio() {
         "artifact-reference";
       const form = new FormData();
       form.append("mode", "artifactize");
+      form.append("stream", "1");
       form.append(
         "source",
         new File([prepared.blob], `${safeName}.jpg`, { type: "image/jpeg" }),
       );
 
-      const response = await fetch("/api/image", { method: "POST", body: form });
-      const data = (await response.json().catch(() => null)) as {
-        artifacts?: Array<Partial<GeneratedArtifactResult>>;
-        detectedCount?: number;
-        failedCount?: number;
-        error?: string;
-        detail?: string;
-      } | null;
+      const response = await fetch("/api/image", {
+        method: "POST",
+        body: form,
+        headers: { Accept: "application/x-ndjson" },
+        signal: abortController.signal,
+      });
       if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as {
+          error?: string;
+          detail?: string;
+        } | null;
         throw new Error(
           data?.detail || data?.error || "The image could not be turned into artifacts",
         );
       }
 
       const createdAt = timestamp();
-      const assets = (data?.artifacts ?? []).flatMap((artifact, index) => {
-        if (
-          typeof artifact.image !== "string" ||
-          !artifact.image.startsWith("data:image/") ||
-          !isAssetCategory(artifact.category)
-        ) {
-          return [];
+      await readArtifactExtractionStream(response, (event) => {
+        if (event.type === "started") return;
+
+        if (event.type === "inventory") {
+          const slots = event.items
+            .filter(
+              (item) =>
+                typeof item.id === "string" &&
+                typeof item.index === "number" &&
+                typeof item.name === "string" &&
+                typeof item.prompt === "string" &&
+                isAssetCategory(item.category),
+            )
+            .map(
+              (item) =>
+                ({
+                  ...item,
+                  status: "extracting",
+                }) satisfies ArtifactExtractionSlot,
+            );
+          if (slots.length === 0) {
+            throw new Error("The image model did not identify any usable pieces");
+          }
+          inventoryReceived = true;
+          detectedCount = event.detectedCount;
+          replaceArtifactExtractionSlots(slots);
+          return;
         }
-        const prompt =
-          typeof artifact.prompt === "string" && artifact.prompt.trim()
-            ? artifact.prompt.trim()
-            : "Digitized from an uploaded reference image";
-        const name =
-          typeof artifact.name === "string" && artifact.name.trim()
-            ? artifact.name.trim().slice(0, 80)
-            : pieceNameFromPrompt(prompt);
-        return [
-          {
-            id: makeId("custom"),
-            name,
-            category: artifact.category,
-            prompt,
-            src: artifact.image,
-            accent: categoryAccent[artifact.category],
-            custom: true,
-            createdAt: createdAt - index,
-          } satisfies StudioAsset,
-        ];
+
+        if (event.type === "artifact") {
+          const asset = studioAssetFromArtifact(
+            event.artifact,
+            event.index,
+            createdAt,
+            "Digitized from an uploaded reference image",
+          );
+          if (!asset) {
+            failedCount += 1;
+            updateArtifactExtractionSlots((current) =>
+              current.map((slot) =>
+                slot.id === event.id
+                  ? {
+                      ...slot,
+                      status: "error",
+                      error: "The returned image could not be displayed.",
+                    }
+                  : slot,
+              ),
+            );
+            return;
+          }
+
+          completedCount += 1;
+          updateArtifactExtractionSlots((current) =>
+            current.map((slot) =>
+              slot.id === event.id
+                ? { ...slot, status: "complete", asset, error: undefined }
+                : slot,
+            ),
+          );
+          setCreatedAssets((current) =>
+            [...current, asset].sort(
+              (left, right) => (right.createdAt ?? 0) - (left.createdAt ?? 0),
+            ),
+          );
+          return;
+        }
+
+        if (event.type === "artifact-error") {
+          failedCount += 1;
+          updateArtifactExtractionSlots((current) =>
+            current.map((slot) =>
+              slot.id === event.id
+                ? { ...slot, status: "error", error: event.detail }
+                : slot,
+            ),
+          );
+          return;
+        }
+
+        if (event.type === "complete") {
+          streamCompleted = true;
+          completedCount = event.completedCount;
+          detectedCount = event.detectedCount;
+          failedCount = event.failedCount;
+          return;
+        }
+
+        throw new Error(event.detail || event.error);
       });
-      if (assets.length === 0) {
+      if (!streamCompleted) {
+        throw new Error("The extraction stream ended before it completed");
+      }
+      if (completedCount === 0) {
         throw new Error("The image model did not return any usable artifacts");
       }
 
-      setCreatedAssets(assets);
       assetGeneration.complete();
       completed = true;
-      await holdForReveal();
-
-      const failedCount =
-        typeof data?.failedCount === "number" ? data.failedCount : 0;
-      const detectedCount =
-        typeof data?.detectedCount === "number"
-          ? data.detectedCount
-          : assets.length + failedCount;
       const details = [
         failedCount > 0
-          ? `Created ${assets.length} of ${detectedCount} detected products.`
-          : assets.length > 1
+          ? `Created ${completedCount} of ${detectedCount} detected products.`
+          : completedCount > 1
             ? "Each detected product is ready as its own piece."
             : "Your new piece is ready.",
         "Choose what to add to your closet or place on a portrait.",
@@ -1148,42 +1345,62 @@ export function RiyaStudio() {
         .join(" ");
       showToast(
         "success",
-        `${assets.length} ${assets.length === 1 ? "piece" : "pieces"} ready`,
+        `${completedCount} ${completedCount === 1 ? "piece" : "pieces"} ready`,
         details,
       );
     } catch (error) {
-      if (sourceStaged) replaceCreatedSourceImage(null);
+      abortController.abort();
+      if (inventoryReceived) {
+        const detail =
+          error instanceof Error ? error.message : "The extraction was interrupted.";
+        updateArtifactExtractionSlots((current) =>
+          current.map((slot) =>
+            slot.status === "extracting"
+              ? { ...slot, status: "error", error: detail }
+              : slot,
+          ),
+        );
+      } else if (sourceStaged) {
+        replaceArtifactExtractionSlots([]);
+        replaceCreatedSourceImage(null);
+      }
       showToast(
         "error",
-        "The image was not digitized",
+        completedCount > 0 ? "Some pieces are ready" : "The image was not digitized",
         error instanceof Error ? error.message : "Try another product image.",
       );
     } finally {
       if (!completed) assetGeneration.cancel();
+      if (artifactExtractionAbortRef.current === abortController) {
+        artifactExtractionAbortRef.current = null;
+      }
       setCreatingAsset(false);
+    }
+  };
+
+  const removeCreatedAssetResult = (assetId: string) => {
+    setCreatedAssets((current) =>
+      current.filter((candidate) => candidate.id !== assetId),
+    );
+    const remainingSlots = artifactExtractionSlotsRef.current.filter(
+      (slot) => slot.asset?.id !== assetId,
+    );
+    replaceArtifactExtractionSlots(remainingSlots);
+    if (!creatingAsset && remainingSlots.length === 0) {
+      replaceCreatedSourceImage(null);
     }
   };
 
   const addCreatedAssetToCloset = async (asset: StudioAsset) => {
     if (customAssets.some((candidate) => candidate.id === asset.id)) {
-      setCreatedAssets((current) =>
-        current.filter((candidate) => candidate.id !== asset.id),
-      );
-      if (createdAssets.length === 1) {
-        replaceCreatedSourceImage(null);
-      }
+      removeCreatedAssetResult(asset.id);
       return;
     }
 
     try {
       await saveWardrobeAsset(asset);
       setCustomAssets((existing) => [asset, ...existing]);
-      setCreatedAssets((current) =>
-        current.filter((candidate) => candidate.id !== asset.id),
-      );
-      if (createdAssets.length === 1) {
-        replaceCreatedSourceImage(null);
-      }
+      removeCreatedAssetResult(asset.id);
       showToast("success", "Added to your closet", asset.name);
     } catch {
       showToast(
@@ -1202,8 +1419,15 @@ export function RiyaStudio() {
           ? existing
           : [asset, ...existing],
       );
-      setFashionArtifacts((current) =>
-        current.filter((candidate) => candidate.id !== asset.id),
+      setFashionArtifactJobs((current) =>
+        current.flatMap((job) => {
+          const artifacts = job.artifacts.filter(
+            (candidate) => candidate.id !== asset.id,
+          );
+          return job.status === "complete" && artifacts.length === 0
+            ? []
+            : [{ ...job, artifacts }];
+        }),
       );
       showToast("success", "Added to your closet", asset.name);
     } catch {
@@ -1216,21 +1440,29 @@ export function RiyaStudio() {
   };
 
   const dismissFashionArtifact = (asset: StudioAsset) => {
-    setFashionArtifacts((current) =>
-      current.filter((candidate) => candidate.id !== asset.id),
+    setFashionArtifactJobs((current) =>
+      current.flatMap((job) => {
+        const artifacts = job.artifacts.filter(
+          (candidate) => candidate.id !== asset.id,
+        );
+        return job.status === "complete" && artifacts.length === 0
+          ? []
+          : [{ ...job, artifacts }];
+      }),
+    );
+  };
+
+  const dismissFashionArtifactJob = (jobId: string) => {
+    setFashionArtifactJobs((current) =>
+      current.filter((job) => job.id !== jobId),
     );
   };
 
   const dismissCreatedAsset = (asset: StudioAsset) => {
-    setCreatedAssets((current) =>
-      current.filter((candidate) => candidate.id !== asset.id),
-    );
+    removeCreatedAssetResult(asset.id);
     setLayers((existing) =>
       existing.filter((layer) => layer.asset.id !== asset.id),
     );
-    if (createdAssets.length === 1) {
-      replaceCreatedSourceImage(null);
-    }
   };
 
   const deleteCustomAsset = async (asset: StudioAsset) => {
@@ -1240,6 +1472,9 @@ export function RiyaStudio() {
       setLayers((existing) => existing.filter((layer) => layer.asset.id !== asset.id));
       setCreatedAssets((current) =>
         current.filter((candidate) => candidate.id !== asset.id),
+      );
+      updateArtifactExtractionSlots((current) =>
+        current.filter((slot) => slot.asset?.id !== asset.id),
       );
       showToast("info", "Piece removed", `${asset.name} was removed from your atelier.`);
     } catch {
@@ -1548,7 +1783,6 @@ export function RiyaStudio() {
                 disabled={
                   !currentImage ||
                   generating ||
-                  materializingFashion ||
                   !hasPendingEdits
                 }
               >
@@ -1590,13 +1824,13 @@ export function RiyaStudio() {
             creatingAsset={creatingAsset}
             assetProgress={assetGeneration.progress}
             createdAssets={createdAssets}
+            artifactExtractionSlots={artifactExtractionSlots}
             createdSourceImage={createdSourceImage}
             createdSourceName={createdSourceName}
-            materializingFashion={materializingFashion}
-            fashionArtifactProgress={fashionArtifactGeneration.progress}
-            fashionArtifacts={fashionArtifacts}
+            fashionArtifactJobs={fashionArtifactJobs}
             onAddFashionArtifact={addFashionArtifactToCloset}
             onDismissFashionArtifact={dismissFashionArtifact}
+            onDismissFashionArtifactJob={dismissFashionArtifactJob}
             apiConfigured={assetApiConfigured}
             hasPortrait={Boolean(currentImage)}
             disabled={generating}

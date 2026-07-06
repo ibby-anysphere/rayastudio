@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 460" width="360" height="460">
+  <defs>
+    <radialGradient id="portraitGlow" cx="50%" cy="26%" r="70%">
+      <stop offset="0" stop-color="#f9d9d1"/>
+      <stop offset=".48" stop-color="#be8692"/>
+      <stop offset="1" stop-color="#34263b"/>
+    </radialGradient>
+    <linearGradient id="portraitDress" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#a6536c"/>
+      <stop offset=".55" stop-color="#4a294c"/>
+      <stop offset="1" stop-color="#1e1831"/>
+    </linearGradient>
+    <linearGradient id="lipGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#e78aa4"/>
+      <stop offset=".48" stop-color="#c64f6a"/>
+      <stop offset="1" stop-color="#9f3556"/>
+    </linearGradient>
+    <linearGradient id="dressSheen" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#fff" stop-opacity=".34"/>
+      <stop offset=".42" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6f3155" stop-opacity=".16"/>
+    </linearGradient>
+    <pattern id="hearts" width="30" height="27" patternUnits="userSpaceOnUse">
+      <rect width="30" height="27" fill="#ef86aa"/>
+      <path d="M15 20C7 15 7 8 11 7c3-1 4 2 4 3 1-2 3-4 6-3 5 2 4 8-6 13Z" fill="#ffc5d9" opacity=".58"/>
+    </pattern>
+    <linearGradient id="gold" x1="0" x2="1">
+      <stop stop-color="#8e6b2d"/>
+      <stop offset=".48" stop-color="#fff0aa"/>
+      <stop offset="1" stop-color="#9a7332"/>
+    </linearGradient>
+    <radialGradient id="diamond">
+      <stop stop-color="#fff"/>
+      <stop offset=".35" stop-color="#e7f7ff"/>
+      <stop offset="1" stop-color="#a9c9d5"/>
+    </radialGradient>
+    <filter id="portraitBlur">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="crownShadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-opacity=".24"/>
+    </filter>
+    <filter id="crownContactShadow" x="-20%" y="-100%" width="140%" height="300%">
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+    <filter id="crownGemDepth" x="-60%" y="-60%" width="220%" height="240%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#6d4b20" flood-opacity=".36"/>
+      <feDropShadow dx="0" dy="0" stdDeviation="1.2" flood-color="#fff8c9" flood-opacity=".8"/>
+    </filter>
+    <clipPath id="neckOnly">
+      <rect x="116" y="252" width="144" height="86"/>
+    </clipPath>
+  </defs>
+
+  <rect width="360" height="460" rx="32" fill="#e9ded8"/>
+  <circle cx="185" cy="145" r="126" fill="url(#portraitGlow)" opacity=".32" filter="url(#portraitBlur)"/>
+  <path d="M116 170c3-79 35-124 74-124 50 0 82 50 74 134-7-29-20-53-36-72-21 42-57 63-112 62Z" fill="#2a2030"/>
+  <ellipse cx="188" cy="168" rx="65" ry="82" fill="#d6a18f"/>
+  <path d="M129 151c13-71 44-94 77-91 37 4 59 39 58 89-22-16-36-40-42-68-15 37-49 61-93 70Z" fill="#302332"/>
+  <circle cx="163" cy="174" r="4" fill="#382b34"/>
+  <circle cx="213" cy="174" r="4" fill="#382b34"/>
+  <path d="M151 162c9-6 18-6 26-1M201 161c9-5 18-4 25 2" fill="none" stroke="#4c3138" stroke-width="4" stroke-linecap="round"/>
+
+  <path d="M158 200c9-8 20-7 29-3 10-5 22-5 31 3-8 9-19 13-30 13s-22-4-30-13Z" fill="url(#lipGloss)"/>
+
+  <path d="M94 455c7-127 42-188 94-188 57 0 90 61 99 188Z" fill="url(#portraitDress)" clip-path="url(#neckOnly)"/>
+
+  <g transform="translate(9.4 0) scale(.95 1)">
+    <path d="M133 279c-22-2-41 11-50 32-8 18-5 36 18 47l24-25c-7-20-4-40 8-54Z" fill="url(#hearts)" opacity="1"/>
+    <path d="M242 279c23-2 42 11 51 32 8 18 5 36-18 47l-24-25c7-20 4-40-9-54Z" fill="url(#hearts)" opacity="1"/>
+    <path d="M133 279c12 14 29 22 55 23 26-1 43-9 55-23 13 21 20 49 28 74 15 31 25 65 33 102H72c8-37 19-71 33-102 8-25 14-53 28-74Z" fill="url(#hearts)" opacity="1"/>
+    <path d="M133 279c12 14 29 22 55 23 26-1 43-9 55-23 13 21 20 49 28 74 15 31 25 65 33 102H72c8-37 19-71 33-102 8-25 14-53 28-74Z" fill="url(#dressSheen)" opacity=".54"/>
+  </g>
+
+  <path d="M129 80c17-8 38-11 59-11s42 3 59 11" fill="none" stroke="#160f18" stroke-width="8" stroke-linecap="round" opacity=".3" filter="url(#crownContactShadow)"/>
+  <g transform="translate(112.8 15) scale(.47 .45)">
+    <path d="M42 146c32-12 62-18 118-18s86 6 118 18" fill="none" stroke="#60431f" stroke-width="11" stroke-linecap="round" opacity=".72"/>
+    <g fill="none" stroke="url(#gold)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" filter="url(#crownShadow)">
+      <path d="M34 141c36-14 65-20 126-20s90 6 126 20"/>
+      <path d="M52 132 85 76l29 45 46-92 46 92 29-45 33 56"/>
+      <path d="M85 76c16 7 25 4 29-14 8 22 24 21 46-33 22 54 38 55 46 33 4 18 13 21 29 14"/>
+    </g>
+    <path d="M39 137c35-11 67-16 121-16s86 5 121 16" fill="none" stroke="#fff4bd" stroke-width="2" stroke-linecap="round" opacity=".7"/>
+    <g fill="url(#diamond)" stroke="#d7b867" stroke-width="3" filter="url(#crownGemDepth)">
+      <path d="M160 22c-19 18-21 35 0 52 21-17 19-34 0-52Z"/>
+      <circle cx="84" cy="74" r="9"/>
+      <circle cx="114" cy="61" r="8"/>
+      <circle cx="206" cy="61" r="8"/>
+      <circle cx="236" cy="74" r="9"/>
+      <circle cx="49" cy="132" r="6"/>
+      <circle cx="270" cy="132" r="6"/>
+    </g>
+  </g>
+  <path d="M128 76c5 1 9 5 11 11l-3 6c-2-5-5-9-9-11Z" fill="#2a2030"/>
+  <path d="M248 76c-5 1-9 5-11 11l3 6c2-5 5-9 9-11Z" fill="#2a2030"/>
+</svg>

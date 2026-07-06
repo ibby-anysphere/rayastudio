@@ -256,14 +256,411 @@ function fashionMaskDimensions(width: number, height: number, maxDimension = 768
   };
 }
 
+const FASHION_FILL_HOLD_MS = 260;
+const IDLE_INITIAL_HOLD_MS = 3_000;
+const IDLE_LIP_APPROACH_START_MS = IDLE_INITIAL_HOLD_MS;
+const IDLE_LIP_TRACE_START_MS = IDLE_LIP_APPROACH_START_MS + 250;
+const IDLE_LIP_TRACE_DURATION_MS = 765;
+const IDLE_DRESS_APPROACH_START_MS = IDLE_INITIAL_HOLD_MS + 1_950;
+const IDLE_DRESS_TRACE_START_MS = IDLE_DRESS_APPROACH_START_MS + 250;
+const IDLE_DRESS_TRACE_DURATION_MS = 880;
+const IDLE_DRESS_JUMP_MS = 120;
+const IDLE_ACCESSORY_MOVE_START_MS = IDLE_INITIAL_HOLD_MS + 1_000;
+const IDLE_ACCESSORY_ARRIVE_MS = IDLE_ACCESSORY_MOVE_START_MS + 320;
+const IDLE_ACCESSORY_RETURN_START_MS = IDLE_ACCESSORY_ARRIVE_MS + 460;
+const IDLE_ACCESSORY_RETURN_END_MS = IDLE_ACCESSORY_RETURN_START_MS + 340;
+const IDLE_CROWN_START_MS = IDLE_INITIAL_HOLD_MS + 1_260;
+const IDLE_CROWN_SETTLED_MS = IDLE_INITIAL_HOLD_MS + 1_800;
+const IDLE_FILL_DURATION_MS = 420;
+const IDLE_POST_FILL_SETTLE_MS = 290;
+const IDLE_AFTER_REVEAL_DURATION_MS = 600;
+const IDLE_FINAL_HOLD_MS = 4_000;
+const IDLE_RESET_FADE_MS = 500;
+const IDLE_RESTART_FADE_IN_MS = 250;
+const IDLE_FILL_START_MS =
+  IDLE_DRESS_TRACE_START_MS +
+  IDLE_DRESS_TRACE_DURATION_MS +
+  IDLE_DRESS_JUMP_MS +
+  FASHION_FILL_HOLD_MS;
+const IDLE_CLOTHES_RETURN_START_MS = IDLE_FILL_START_MS + 500;
+const IDLE_CLOTHES_RETURN_END_MS = IDLE_CLOTHES_RETURN_START_MS + 320;
+const IDLE_AFTER_REVEAL_START_MS =
+  IDLE_FILL_START_MS + IDLE_FILL_DURATION_MS + IDLE_POST_FILL_SETTLE_MS;
+const IDLE_AFTER_REVEAL_END_MS =
+  IDLE_AFTER_REVEAL_START_MS + IDLE_AFTER_REVEAL_DURATION_MS;
+const IDLE_RESET_START_MS = IDLE_AFTER_REVEAL_END_MS + IDLE_FINAL_HOLD_MS;
+const IDLE_DEMO_DURATION_MS = IDLE_RESET_START_MS + IDLE_RESET_FADE_MS;
+const IDLE_BASE_BODY_PATH =
+  "M94 455c7-127 42-188 94-188 57 0 90 61 99 188Z";
+const IDLE_DRESS_ROUGH_PATH =
+  "M132 279c14 13 31 26 56 24 26 2 43-11 56-25 22-2 42 10 51 32 9 19 5 37-18 50-10 23 9 60 23 95-30-4-58 3-87-2-28-4-57 5-85 0-20-3-37 2-52 1 12-36 28-72 24-95-22-10-26-29-20-47 8-22 29-36 52-33Z";
+
 function PortraitPlaceholder() {
+  const lipPathRef = useRef<SVGPathElement>(null);
+  const dressPathRef = useRef<SVGPathElement>(null);
+  const dressFillRef = useRef<SVGGElement>(null);
+  const crownRef = useRef<SVGImageElement>(null);
+  const afterImageRef = useRef<SVGImageElement>(null);
+  const afterSweepRef = useRef<SVGRectElement>(null);
+  const portraitContentRef = useRef<SVGGElement>(null);
+  const makeupTagRef = useRef<HTMLSpanElement>(null);
+  const accessoryTagRef = useRef<HTMLSpanElement>(null);
+  const clothesTagRef = useRef<HTMLSpanElement>(null);
+  const fillPulseRef = useRef<HTMLSpanElement>(null);
+  const fillPulseCycleRef = useRef(-1);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const lipPath = lipPathRef.current;
+    const dressPath = dressPathRef.current;
+    const dressFill = dressFillRef.current;
+    const crown = crownRef.current;
+    const afterImage = afterImageRef.current;
+    const afterSweep = afterSweepRef.current;
+    const portraitContent = portraitContentRef.current;
+    const makeupTag = makeupTagRef.current;
+    const accessoryTag = accessoryTagRef.current;
+    const clothesTag = clothesTagRef.current;
+    const fillPulse = fillPulseRef.current;
+    if (
+      !lipPath ||
+      !dressPath ||
+      !dressFill ||
+      !crown ||
+      !afterImage ||
+      !afterSweep ||
+      !portraitContent ||
+      !makeupTag ||
+      !accessoryTag ||
+      !clothesTag ||
+      !fillPulse
+    ) {
+      return;
+    }
+
+    const lipLength = lipPath.getTotalLength();
+    const dressLength = dressPath.getTotalLength();
+    const dressTraceLength = dressLength + 8;
+    lipPath.style.strokeDasharray = `${lipLength}`;
+    dressPath.style.strokeDasharray = `${dressTraceLength} ${dressTraceLength}`;
+
+    const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+    const ease = (value: number) => {
+      const clamped = clamp01(value);
+      return clamped < 0.5
+        ? 2 * clamped * clamped
+        : 1 - Math.pow(-2 * clamped + 2, 2) / 2;
+    };
+    const placeAt = (
+      element: HTMLElement,
+      point: DOMPoint,
+      angle = 0,
+      scale = 1,
+    ) => {
+      element.style.left = `${(point.x / 360) * 100}%`;
+      element.style.top = `${(point.y / 460) * 100}%`;
+      element.style.transform = `translate(-50%, -50%) rotate(${angle}deg) scale(${scale})`;
+    };
+    const pointAndAngle = (
+      path: SVGGeometryElement,
+      length: number,
+      progress: number,
+    ) => {
+      const distance = clamp01(progress) * length;
+      const point = path.getPointAtLength(distance);
+      const next = path.getPointAtLength(Math.min(length, distance + 2));
+      return {
+        point,
+        angle: (Math.atan2(next.y - point.y, next.x - point.x) * 180) / Math.PI,
+      };
+    };
+
+    const startedAt = performance.now();
+    let frame = 0;
+    const tick = (now: number) => {
+      const totalElapsed = now - startedAt;
+      const elapsed = totalElapsed % IDLE_DEMO_DURATION_MS;
+      const cycle = Math.floor(totalElapsed / IDLE_DEMO_DURATION_MS);
+      const resetProgress = clamp01(
+        (elapsed - IDLE_RESET_START_MS) / IDLE_RESET_FADE_MS,
+      );
+      const restartProgress = clamp01(elapsed / IDLE_RESTART_FADE_IN_MS);
+      const contentOpacity =
+        elapsed >= IDLE_RESET_START_MS
+          ? `${1 - ease(resetProgress)}`
+          : cycle === 0
+            ? "1"
+            : `${ease(restartProgress)}`;
+      portraitContent.style.opacity = contentOpacity;
+      makeupTag.style.opacity = contentOpacity;
+      accessoryTag.style.opacity = contentOpacity;
+      clothesTag.style.opacity = contentOpacity;
+
+      const lipProgress = clamp01(
+        (elapsed - IDLE_LIP_TRACE_START_MS) / IDLE_LIP_TRACE_DURATION_MS,
+      );
+      const lipTraceEnd = IDLE_LIP_TRACE_START_MS + IDLE_LIP_TRACE_DURATION_MS;
+      const lipPathStart = lipPath.getPointAtLength(0);
+      const lipPathEnd = lipPath.getPointAtLength(lipLength);
+      const makeupBasePoint = new DOMPoint(0, 78);
+      lipPath.style.opacity =
+        elapsed >= IDLE_LIP_TRACE_START_MS ? "1" : "0";
+      lipPath.style.strokeDashoffset = `${lipLength * (1 - lipProgress)}`;
+      makeupTag.classList.toggle(
+        styles.idleMakeupTagTracing,
+        elapsed >= IDLE_LIP_TRACE_START_MS && elapsed <= lipTraceEnd + 120,
+      );
+      if (elapsed < IDLE_LIP_APPROACH_START_MS) {
+        placeAt(
+          makeupTag,
+          new DOMPoint(
+            makeupBasePoint.x,
+            makeupBasePoint.y + Math.sin(elapsed / 220) * 5,
+          ),
+        );
+      } else if (elapsed < IDLE_LIP_TRACE_START_MS) {
+        const approach = ease(
+          (elapsed - IDLE_LIP_APPROACH_START_MS) /
+            (IDLE_LIP_TRACE_START_MS - IDLE_LIP_APPROACH_START_MS),
+        );
+        placeAt(
+          makeupTag,
+          new DOMPoint(
+            makeupBasePoint.x + (lipPathStart.x - makeupBasePoint.x) * approach,
+            makeupBasePoint.y + (lipPathStart.y - makeupBasePoint.y) * approach,
+          ),
+          0,
+          1 - approach * 0.24,
+        );
+      } else if (elapsed <= lipTraceEnd) {
+        const { point } = pointAndAngle(lipPath, lipLength, lipProgress);
+        placeAt(makeupTag, point);
+      } else if (elapsed <= lipTraceEnd + 280) {
+        const returnProgress = ease((elapsed - lipTraceEnd) / 280);
+        placeAt(
+          makeupTag,
+          new DOMPoint(
+            lipPathEnd.x + (makeupBasePoint.x - lipPathEnd.x) * returnProgress,
+            lipPathEnd.y + (makeupBasePoint.y - lipPathEnd.y) * returnProgress,
+          ),
+          0,
+          0.76 + returnProgress * 0.24,
+        );
+      } else {
+        placeAt(
+          makeupTag,
+          new DOMPoint(
+            makeupBasePoint.x,
+            makeupBasePoint.y + Math.sin(elapsed / 220) * 5,
+          ),
+        );
+      }
+
+      const accessoryBasePoint = new DOMPoint(364, 207);
+      const accessoryTargetPoint = new DOMPoint(184, 69);
+      if (elapsed < IDLE_ACCESSORY_MOVE_START_MS) {
+        placeAt(
+          accessoryTag,
+          new DOMPoint(
+            accessoryBasePoint.x,
+            accessoryBasePoint.y + Math.sin(elapsed / 250) * 5,
+          ),
+        );
+      } else if (elapsed < IDLE_ACCESSORY_ARRIVE_MS) {
+        const progress = ease(
+          (elapsed - IDLE_ACCESSORY_MOVE_START_MS) /
+            (IDLE_ACCESSORY_ARRIVE_MS - IDLE_ACCESSORY_MOVE_START_MS),
+        );
+        placeAt(
+          accessoryTag,
+          new DOMPoint(
+            accessoryBasePoint.x +
+              (accessoryTargetPoint.x - accessoryBasePoint.x) * progress,
+            accessoryBasePoint.y +
+              (accessoryTargetPoint.y - accessoryBasePoint.y) * progress,
+          ),
+          0,
+          1 - progress * 0.1,
+        );
+      } else if (elapsed < IDLE_ACCESSORY_RETURN_START_MS) {
+        const pulse = 0.94 + Math.sin((elapsed - IDLE_ACCESSORY_ARRIVE_MS) / 70) * 0.05;
+        placeAt(accessoryTag, accessoryTargetPoint, 0, pulse);
+      } else if (elapsed < IDLE_ACCESSORY_RETURN_END_MS) {
+        const progress = ease(
+          (elapsed - IDLE_ACCESSORY_RETURN_START_MS) /
+            (IDLE_ACCESSORY_RETURN_END_MS - IDLE_ACCESSORY_RETURN_START_MS),
+        );
+        placeAt(
+          accessoryTag,
+          new DOMPoint(
+            accessoryTargetPoint.x +
+              (accessoryBasePoint.x - accessoryTargetPoint.x) * progress,
+            accessoryTargetPoint.y +
+              (accessoryBasePoint.y - accessoryTargetPoint.y) * progress,
+          ),
+          0,
+          0.9 + progress * 0.1,
+        );
+      } else {
+        placeAt(
+          accessoryTag,
+          new DOMPoint(
+            accessoryBasePoint.x,
+            accessoryBasePoint.y + Math.sin(elapsed / 250) * 5,
+          ),
+        );
+      }
+
+      if (elapsed < IDLE_CROWN_START_MS) {
+        crown.style.opacity = "0";
+        crown.style.transform = "scale(0.25) rotate(-8deg)";
+      } else if (elapsed < IDLE_CROWN_START_MS + 180) {
+        const progress = ease((elapsed - IDLE_CROWN_START_MS) / 180);
+        crown.style.opacity = `${progress}`;
+        crown.style.transform = `scale(${0.25 + progress * 0.93}) rotate(${
+          -8 + progress * 11
+        }deg)`;
+      } else if (elapsed < IDLE_CROWN_SETTLED_MS) {
+        const progress = ease(
+          (elapsed - (IDLE_CROWN_START_MS + 180)) /
+            (IDLE_CROWN_SETTLED_MS - IDLE_CROWN_START_MS - 180),
+        );
+        crown.style.opacity = "1";
+        crown.style.transform = `scale(${1.18 - progress * 0.18}) rotate(${
+          3 - progress * 3
+        }deg)`;
+      } else if (elapsed < IDLE_RESET_START_MS) {
+        crown.style.opacity = "1";
+        crown.style.transform = "scale(1) rotate(0deg)";
+      } else {
+        crown.style.opacity = "1";
+      }
+
+      const dressTraceEnd = IDLE_DRESS_TRACE_START_MS + IDLE_DRESS_TRACE_DURATION_MS;
+      const dressProgress = clamp01(
+        (elapsed - IDLE_DRESS_TRACE_START_MS) / IDLE_DRESS_TRACE_DURATION_MS,
+      );
+      dressPath.style.opacity =
+        elapsed >= IDLE_DRESS_TRACE_START_MS ? "1" : "0";
+      dressPath.style.strokeDashoffset = `${dressTraceLength * (1 - dressProgress)}`;
+
+      const basePoint = new DOMPoint(317, 396);
+      const centerPoint = new DOMPoint(188, 355);
+      const dressPathStart = dressPath.getPointAtLength(0);
+      clothesTag.classList.toggle(
+        styles.idleClothesTagTracing,
+        elapsed >= IDLE_DRESS_TRACE_START_MS &&
+          elapsed <= IDLE_FILL_START_MS + 500,
+      );
+      if (elapsed < IDLE_DRESS_APPROACH_START_MS) {
+        placeAt(
+          clothesTag,
+          new DOMPoint(basePoint.x, basePoint.y + Math.sin(elapsed / 240) * 5),
+        );
+      } else if (elapsed < IDLE_DRESS_TRACE_START_MS) {
+        const approach = ease(
+          (elapsed - IDLE_DRESS_APPROACH_START_MS) /
+            (IDLE_DRESS_TRACE_START_MS - IDLE_DRESS_APPROACH_START_MS),
+        );
+        placeAt(
+          clothesTag,
+          new DOMPoint(
+            basePoint.x + (dressPathStart.x - basePoint.x) * approach,
+            basePoint.y + (dressPathStart.y - basePoint.y) * approach,
+          ),
+          0,
+          1 - approach * 0.08,
+        );
+      } else if (elapsed <= dressTraceEnd) {
+        const { point } = pointAndAngle(dressPath, dressLength, dressProgress);
+        placeAt(clothesTag, point);
+      } else if (elapsed <= dressTraceEnd + IDLE_DRESS_JUMP_MS) {
+        const lastPoint = dressPath.getPointAtLength(dressLength);
+        const jump = ease((elapsed - dressTraceEnd) / IDLE_DRESS_JUMP_MS);
+        placeAt(
+          clothesTag,
+          new DOMPoint(
+            lastPoint.x + (centerPoint.x - lastPoint.x) * jump,
+            lastPoint.y + (centerPoint.y - lastPoint.y) * jump,
+          ),
+          0,
+          0.94 + jump * 0.08,
+        );
+      } else if (elapsed < IDLE_CLOTHES_RETURN_START_MS) {
+        placeAt(clothesTag, centerPoint, 0, 1.02);
+      } else if (elapsed < IDLE_CLOTHES_RETURN_END_MS) {
+        const returnProgress = ease(
+          (elapsed - IDLE_CLOTHES_RETURN_START_MS) /
+            (IDLE_CLOTHES_RETURN_END_MS - IDLE_CLOTHES_RETURN_START_MS),
+        );
+        placeAt(
+          clothesTag,
+          new DOMPoint(
+            centerPoint.x + (basePoint.x - centerPoint.x) * returnProgress,
+            centerPoint.y + (basePoint.y - centerPoint.y) * returnProgress,
+          ),
+        );
+      } else {
+        placeAt(
+          clothesTag,
+          new DOMPoint(
+            basePoint.x,
+            basePoint.y + Math.sin(elapsed / 240) * 5,
+          ),
+        );
+      }
+
+      const fillProgress = clamp01(
+        (elapsed - IDLE_FILL_START_MS) / IDLE_FILL_DURATION_MS,
+      );
+      dressFill.style.opacity = `${fillProgress * 0.58}`;
+      dressFill.style.transform = `scale(${0.08 + ease(fillProgress) * 0.92})`;
+
+      if (elapsed < IDLE_FILL_START_MS) {
+        fillPulse.classList.remove(styles.idleFillPulseActive);
+      } else if (fillPulseCycleRef.current !== cycle) {
+        fillPulseCycleRef.current = cycle;
+        fillPulse.classList.remove(styles.idleFillPulseActive);
+        void fillPulse.offsetWidth;
+        fillPulse.classList.add(styles.idleFillPulseActive);
+      }
+
+      if (elapsed < IDLE_AFTER_REVEAL_START_MS) {
+        afterImage.style.opacity = "0";
+        afterImage.style.clipPath = "inset(0 0 100% 0)";
+        afterSweep.style.opacity = "0";
+        afterSweep.style.transform = "translateY(0)";
+      } else if (elapsed < IDLE_AFTER_REVEAL_END_MS) {
+        const progress = ease(
+          (elapsed - IDLE_AFTER_REVEAL_START_MS) /
+            (IDLE_AFTER_REVEAL_END_MS - IDLE_AFTER_REVEAL_START_MS),
+        );
+        afterImage.style.opacity = "1";
+        afterImage.style.clipPath = `inset(0 0 ${(1 - progress) * 100}% 0)`;
+        afterSweep.style.opacity = `${Math.sin(progress * Math.PI) * 0.9}`;
+        afterSweep.style.transform = `translateY(${progress * 552}px)`;
+      } else {
+        afterImage.style.opacity = "1";
+        afterImage.style.clipPath = "inset(0)";
+        afterSweep.style.opacity = "0";
+      }
+
+      frame = window.requestAnimationFrame(tick);
+    };
+
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
   return (
-    <svg
-      className={styles.placeholderPortrait}
-      viewBox="0 0 360 460"
-      role="img"
-      aria-label="Abstract portrait placeholder"
-    >
+    <>
+      <svg
+        className={styles.placeholderPortrait}
+        viewBox="0 0 360 460"
+        role="img"
+        aria-label="Animated Raya Studio styling demonstration"
+      >
       <defs>
         <radialGradient id="portraitGlow" cx="50%" cy="26%" r="70%">
           <stop offset="0" stopColor="#f9d9d1" />
@@ -282,6 +679,11 @@ function PortraitPlaceholder() {
           <stop offset=".7" stopColor="#ff7a5c" stopOpacity=".24" />
           <stop offset="1" stopColor="#ff7a5c" stopOpacity="0" />
         </linearGradient>
+        <linearGradient id="idlePreDrape" x1="0" y1="0" x2="1" y2="1">
+          <stop stopColor="#fff" stopOpacity=".24" />
+          <stop offset=".44" stopColor="#fff" stopOpacity="0" />
+          <stop offset="1" stopColor="#6f3155" stopOpacity=".14" />
+        </linearGradient>
         <pattern
           id="idleHeartsPattern"
           width="30"
@@ -299,10 +701,11 @@ function PortraitPlaceholder() {
           <feGaussianBlur stdDeviation="18" />
         </filter>
         <clipPath id="idleDressClip">
-          <path d="M77 455c8-127 49-188 111-188 67 0 106 61 116 188Z" />
+          <path d={IDLE_DRESS_ROUGH_PATH} />
         </clipPath>
       </defs>
       <rect width="360" height="460" rx="32" fill="#e9ded8" />
+      <g ref={portraitContentRef}>
       <circle cx="185" cy="145" r="126" fill="url(#portraitGlow)" opacity=".32" filter="url(#portraitBlur)" />
       <path
         d="M116 170c3-79 35-124 74-124 50 0 82 50 74 134-7-29-20-53-36-72-21 42-57 63-112 62Z"
@@ -313,29 +716,25 @@ function PortraitPlaceholder() {
         d="M129 151c13-71 44-94 77-91 37 4 59 39 58 89-22-16-36-40-42-68-15 37-49 61-93 70Z"
         fill="#302332"
       />
-      <path d="M164 188c15 7 31 7 46 0" fill="none" stroke="#754752" strokeWidth="3" strokeLinecap="round" />
-      <path d="M173 216c10 6 23 6 33-1" fill="none" stroke="#9a4b60" strokeWidth="5" strokeLinecap="round" />
-      <path d="M77 455c8-127 49-188 111-188 67 0 106 61 116 188Z" fill="url(#portraitDress)" />
-      <path d="M142 272c6 42 86 42 93-1" fill="none" stroke="#f1c8bb" strokeWidth="8" opacity=".68" />
+      <path d="M164 200c15 7 31 7 46 0" fill="none" stroke="#754752" strokeWidth="3" strokeLinecap="round" />
+      <path d={IDLE_BASE_BODY_PATH} fill="url(#portraitDress)" />
       <circle cx="163" cy="174" r="4" fill="#382b34" />
       <circle cx="213" cy="174" r="4" fill="#382b34" />
       <path d="M151 162c9-6 18-6 26-1M201 161c9-5 18-4 25 2" fill="none" stroke="#4c3138" strokeWidth="4" strokeLinecap="round" />
-      <path d="M92 390c32-24 61-21 86 8 30-37 62-39 98-9" fill="none" stroke="#f2b7c5" strokeOpacity=".34" strokeWidth="18" />
+      <path d="M106 390c27-24 52-21 73 8 26-37 53-39 84-9" fill="none" stroke="#f2b7c5" strokeOpacity=".34" strokeWidth="18" />
       <path
-        className={styles.idleLipFill}
-        d="M161 191c8-10 18-12 27-6 9-6 20-4 28 6-8 11-18 15-28 15-10 0-20-4-27-15Z"
-        fill="#c64f6a"
-      />
-      <path
+        ref={lipPathRef}
         className={styles.idleLipPaint}
-        d="M161 191c8-10 18-12 27-6 9-6 20-4 28 6-8 11-18 15-28 15-10 0-20-4-27-15Z"
+        d="M158 201c2-7 11-11 20-8 5 1 8 4 11 3 5-3 12-5 18-2 6 2 9 7 8 11-3 6-12 9-22 10-10 1-20-2-27-5-5-2-9-6-8-9Z"
         fill="none"
         stroke="#c64f6a"
-        strokeWidth="6"
+        strokeWidth="4.5"
+        strokeOpacity=".68"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <image
+        ref={crownRef}
         className={styles.idleCrown}
         href="/brand/raya-idle-crown.svg"
         x="116"
@@ -344,12 +743,18 @@ function PortraitPlaceholder() {
         height="81"
         preserveAspectRatio="xMidYMid meet"
       />
-      <g className={styles.idleDressMagicFill} clipPath="url(#idleDressClip)">
+      <g
+        ref={dressFillRef}
+        className={styles.idleDressMagicFill}
+        clipPath="url(#idleDressClip)"
+      >
         <rect x="70" y="258" width="245" height="205" fill="url(#idleHeartsPattern)" />
+        <rect x="70" y="258" width="245" height="205" fill="url(#idlePreDrape)" />
       </g>
       <path
+        ref={dressPathRef}
         className={styles.idleDressOutline}
-        d="M77 455c8-127 49-188 111-188 67 0 106 61 116 188"
+        d={IDLE_DRESS_ROUGH_PATH}
         fill="none"
         stroke="#ff3d93"
         strokeWidth="7"
@@ -357,8 +762,9 @@ function PortraitPlaceholder() {
         strokeLinejoin="round"
       />
       <image
+        ref={afterImageRef}
         className={styles.idleAfterImage}
-        href="/brand/raya-idle-after.jpg"
+        href="/brand/raya-idle-after.svg?v=20260706-6"
         x="0"
         y="0"
         width="360"
@@ -366,6 +772,7 @@ function PortraitPlaceholder() {
         preserveAspectRatio="xMidYMid slice"
       />
       <rect
+        ref={afterSweepRef}
         className={styles.idleAfterSweep}
         x="-20"
         y="-92"
@@ -373,7 +780,52 @@ function PortraitPlaceholder() {
         height="92"
         fill="url(#idleRevealShimmer)"
       />
-    </svg>
+      </g>
+      </svg>
+      <span
+        ref={makeupTagRef}
+        className={`${styles.floatingTag} ${styles.floatingTagOne} ${styles.idleMakeupTag}`}
+      >
+        <WandSparkles size={13} />
+        <span>Makeup</span>
+      </span>
+      <span
+        ref={accessoryTagRef}
+        className={`${styles.floatingTag} ${styles.floatingTagTwo}`}
+      >
+        <ImagePlus size={13} /> Accessories
+      </span>
+      <span
+        ref={clothesTagRef}
+        className={`${styles.floatingTag} ${styles.floatingTagThree} ${styles.idleClothesTag}`}
+      >
+        <WandSparkles size={13} />
+        <span>Clothes</span>
+      </span>
+      <span
+        ref={fillPulseRef}
+        className={`${styles.fashionPulse} ${styles.idleFillPulse}`}
+        aria-hidden="true"
+      >
+        <b>
+          <WandSparkles size={18} />
+        </b>
+        {Array.from({ length: 20 }, (_, index) => (
+          <i
+            key={index}
+            style={
+              {
+                "--burst-angle": `${index * 18 + (index % 2) * 6}deg`,
+                "--burst-distance": `${30 + (index % 5) * 6}px`,
+                "--burst-delay": `${(index % 4) * 12}ms`,
+              } as CSSProperties
+            }
+          >
+            <WandSparkles size={9 + (index % 3) * 2} />
+          </i>
+        ))}
+      </span>
+    </>
   );
 }
 
@@ -741,6 +1193,15 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       event: ReactPointerEvent<HTMLDivElement>,
     ) => {
       if (generating) return;
+      if (event.pointerType === "touch" && event.isPrimary) {
+        // A primary touch always starts a brand-new gesture. Clearing here
+        // prevents a missed pointerup from making one finger look like the
+        // second finger of an earlier pinch.
+        viewportPointersRef.current.clear();
+        viewportPinchRef.current = null;
+        viewportPanRef.current = null;
+        setViewportPanning(false);
+      }
       viewportPointersRef.current.set(event.pointerId, {
         x: event.clientX,
         y: event.clientY,
@@ -750,6 +1211,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
         event.pointerType === "touch" &&
         viewportPointersRef.current.size >= 2
       ) {
+        if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }
         const points = Array.from(viewportPointersRef.current.values()).slice(
           0,
           2,
@@ -1530,7 +1994,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
             longPressTriggeredRef.current = true;
             longPressStartRef.current = null;
             fillFashionAt(start.point);
-          }, 520);
+          }, FASHION_FILL_HOLD_MS);
         }
         event.preventDefault();
         return;
@@ -1812,18 +2276,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           <div className={styles.emptyArt}>
             <div className={styles.emptyArtGlow} />
             <PortraitPlaceholder />
-            <span className={styles.idleLipWand} aria-hidden="true">
-              <WandSparkles size={14} />
-            </span>
-            <span className={`${styles.floatingTag} ${styles.floatingTagOne}`}>
-              <WandSparkles size={13} /> Makeup
-            </span>
-            <span className={`${styles.floatingTag} ${styles.floatingTagTwo}`}>
-              <ImagePlus size={13} /> Accessories
-            </span>
-            <span className={`${styles.floatingTag} ${styles.floatingTagThree}`}>
-              <WandSparkles size={13} /> Clothes
-            </span>
           </div>
           <div className={styles.emptyCopy}>
             <h2>Begin with a portrait</h2>

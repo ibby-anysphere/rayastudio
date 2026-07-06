@@ -25,6 +25,7 @@ import {
   MAX_INPUT_IMAGES,
   MAX_MAKEUP_LAYERS,
   MAX_WARDROBE_REFERENCES,
+  type ArtifactExtractionStreamEvent,
   type AssetCategory,
   type FashionCategory,
   type FashionMaterialId,
@@ -314,14 +315,29 @@ interface InputLayout {
 function physicalIntegrationRule(
   asset: GenerationIntent["placedAssets"][number],
 ) {
-  const normalizedName = asset.name.toLowerCase();
-  if (normalizedName.includes("tiara") || normalizedName.includes("crown")) {
+  const normalizedDescription = `${asset.name} ${asset.prompt}`.toLowerCase();
+  if (
+    /\b(gloves?|mittens?|mitts?|gauntlets?)\b/.test(normalizedDescription)
+  ) {
+    return "Rebuild it as a real fitted glove product over the intended hand and wrist, with articulated fingers, thumb construction, seams, material thickness, grip, folds, and contact shadows. If the hand is cropped by the photograph, continue the glove naturally to the frame edge without turning it into a sleeve or inventing exposed anatomy.";
+  }
+  if (
+    /\b(bags?|purses?|handbags?|totes?|clutches?)\b/.test(
+      normalizedDescription,
+    )
+  ) {
+    return "Rebuild it as a complete dimensional bag rather than a flat clothing patch: preserve its body, opening, handles or strap, gussets, hardware, material thickness, and believable contents volume, then attach or place it naturally at the nearest plausible hand, shoulder, or hip with gravity and contact shadows.";
+  }
+  if (
+    normalizedDescription.includes("tiara") ||
+    normalizedDescription.includes("crown")
+  ) {
     return "Rebuild it as a genuinely three-dimensional crown: curve its band around the skull as an ellipse in perspective, let the far side pass naturally behind the head or hair, give metal and stones real thickness, contact points, cast shadows, reflections, and camera-matched depth of field.";
   }
   if (
-    normalizedName.includes("necklace") ||
-    normalizedName.includes("chain") ||
-    normalizedName.includes("choker")
+    normalizedDescription.includes("necklace") ||
+    normalizedDescription.includes("chain") ||
+    normalizedDescription.includes("choker")
   ) {
     return "Fit it around the anatomical neck and clavicle—not across the cheeks, mouth, or face—with a perspective-correct back section, natural drape, real metal and gemstone thickness, skin contact, gravity, reflections, and contact shadows.";
   }
@@ -337,7 +353,7 @@ function physicalIntegrationRule(
   if (asset.category === "jewelry") {
     return "Give it real metal and gemstone thickness, correct attachment to anatomy, physically plausible curvature, contact shadows, specular reflections, refraction, and front/behind occlusion.";
   }
-  return "Infer complete three-dimensional geometry, thickness, attachment, perspective, contact shadows, material response, and correct front/behind occlusion in the photographed scene.";
+  return "First infer the most plausible specific real-world item from the full design description, reference appearance, material, shape, scale, placement, and nearby anatomy or clothing. Then rebuild that item with complete three-dimensional geometry, thickness, construction, attachment, perspective, contact shadows, material response, and correct front/behind occlusion in the photographed scene.";
 }
 
 function editPrompt(intent: GenerationIntent, layout: InputLayout) {
@@ -378,9 +394,9 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
                 : "The colored region is the intended outer silhouette and coverage.";
             const categoryInstruction =
               layer.category === "auto"
-                ? "Infer the intended garment or accessory type from the silhouette, body location, pose, and surrounding strokes; do not force it into a preset category."
-                : `Interpret it specifically as a ${category.label.toLowerCase()}.`;
-            return `${index + 1}. Input image ${layer.index}: a hand-drawn ${category.label.toLowerCase()} in ${material.label.toLowerCase()} (${material.prompt}), colored ${layer.color}, with ${pattern.prompt}. ${categoryInstruction} ${shapeInstruction} It occupies the ${describePosition(centerX, centerY)} and roughly ${Math.round(layer.bounds.width * 100)}% × ${Math.round(layer.bounds.height * 100)}% of the photograph.`;
+                ? "Use your visual and fashion knowledge to make the best supported guess at the specific intended item and whether this is the complete wearable, part of another mapped product, or an integrated surface detail. Consider its silhouette, topology, material, pattern, scale, image location, anatomical anchor, and relationship to the source and other maps; do not force it into a preset category."
+                : `Use the explicit ${category.label.toLowerCase()} label while deciding whether this region defines the whole item, one component, or a surface detail of that item.`;
+            return `${index + 1}. Input image ${layer.index}: one hand-drawn fashion design region using ${material.label.toLowerCase()} (${material.prompt}), colored ${layer.color}, with ${pattern.prompt}. ${categoryInstruction} ${shapeInstruction} It occupies the ${describePosition(centerX, centerY)} and roughly ${Math.round(layer.bounds.width * 100)}% × ${Math.round(layer.bounds.height * 100)}% of the photograph.`;
           })
           .join("\n");
 
@@ -402,7 +418,7 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
           const category = fashionCategory(layer.category);
           const material = fashionMaterial(layer.material);
           const pattern = fashionPattern(layer.pattern);
-          return `- Input image ${layer.index} is an isolated FASHION SKETCH map for one ${category.label.toUpperCase()} shape, aligned edge-for-edge with input image ${layout.sourceIndex}. White means no change. The ${layer.color} ${layer.kind === "outline" ? "linework" : "filled/patterned region"} communicates the user's requested silhouette and coverage. Rebuild it as real ${material.label.toLowerCase()} with ${pattern.label.toLowerCase()} styling; never paste the map's pixels.`;
+          return `- Input image ${layer.index} is an isolated FASHION SKETCH map for one ${category.label.toUpperCase()} design region, aligned edge-for-edge with input image ${layout.sourceIndex}. White means no change. The ${layer.color} ${layer.kind === "outline" ? "linework" : "filled/patterned region"} communicates the user's requested shape and coverage. Jointly with the other maps, it may define a complete item, one component, or ornament integrated into a larger mapped item. Rebuild it as real ${material.label.toLowerCase()} with ${pattern.label.toLowerCase()} styling; never paste the map's pixels.`;
         })
         .join("\n")
     : "- There is no hand-drawn fashion instruction map for this edit.";
@@ -421,11 +437,17 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
         .join("\n")
     : "Preserve the source image's existing makeup exactly. Do not invent new makeup or face paint.";
   const fashionInterpretation = layout.fashionLayers.length
-    ? `- Treat the user's rough contour as design intent, not finished artwork. Smooth hand wobble into a deliberate couture cut, bridge tiny accidental gaps, preserve intentional corners and unusual proportions, and remove every trace of digital linework.
-- The authored silhouette is authoritative. If it overlaps existing clothing, locally replace or recut that clothing only where needed to realize the new shape; do not simply tint the old garment.
+    ? `- Read all aligned fashion maps together before rendering. Decide whether each region is an independent product, a component of another mapped product, or a surface treatment contained within it; separate maps do not automatically mean separate objects.
+- Use your general visual, fashion, and physical-world knowledge to make the best supported semantic guess at what the user is trying to create. Weigh all evidence together: contour and topology, material and pattern, color, scale, placement in the image, anatomical anchor, pose, interaction with the body or existing clothing, and relationships among maps. A rough, incomplete, unusual, or cropped drawing still requires a specific plausible interpretation; do not default to a generic patch or garment merely because it is ambiguous.
+- The following are illustrative cues, not a closed list: a fitted region around a hand, wrist, or distal forearm—especially in leather—suggests a glove rather than a sleeve; a curved narrow design at the neck or clavicle suggests a necklace or choker rather than a collar; a handled or strapped volume beside the torso or hip suggests a purse or bag rather than a clothing patch. Apply the same contextual reasoning to any other item.
+- A source-frame crop is not a designed edge. Continue an intended glove, shoe, bag, or other wearable naturally to the frame boundary without zooming, recropping, inventing exposed anatomy, or changing it into a different item.
+- Treat the user's rough contour as design intent, not finished artwork. Smooth hand wobble into a deliberate couture cut, bridge tiny accidental gaps, preserve intentional corners and unusual proportions, and remove every trace of digital linework.
+- For a product or component, the authored contour defines its silhouette. For a nested surface motif, the contour defines the ornament's boundary. If either overlaps existing clothing, locally replace, recut, or decorate that clothing only where needed; do not simply tint it.
+- Treat a smaller shape drawn inside or across a garment as physically integrated embroidery, topstitching, appliqué, inset fabric, trim, or print unless its explicit type and geometry clearly identify a separate object. It must inherit the host cloth's folds, perspective, tension, seams, wear, lighting, and occlusion—never float as a sticker or flat painted blob.
+- On denim, render such motifs with native denim construction: visible thread and stitch relief, denim-on-denim appliqué or patch edges, woven/washed texture, and deformation across folds as appropriate to the drawing. Preserve the authored motif and color instead of replacing it with a generic all-over print.
 - Reconstruct each named material physically: correct thickness, weave or pile, seams, hems, folds, tension, gravity, highlights, and contact shadows. Make the named print part of the textile so it follows folds, perspective, and occlusion.
-- Keep separate maps as separate design regions. Do not spread one region's color, fabric, or print into another.
-- Fit tops, dresses, skirts, pants, and outerwear around the subject's real anatomy and pose. Build bags, shoes, and accessories as coherent three-dimensional objects attached or held at the nearest plausible location.
+- Keep each map's authored color, fabric, pattern, and spatial boundary distinct even when multiple maps combine into one product.
+- Fit tops, dresses, skirts, pants, and outerwear around the subject's real anatomy and pose. Build gloves, necklaces, bags, shoes, and other accessories as coherent three-dimensional wearables attached, wrapped, or held at the nearest plausible anatomical anchor.
 - A color value is the intended textile color, not a translucent overlay. Match it faithfully while relighting it under the photograph's real illumination.`
     : "Preserve all existing clothing and accessories unless a separate wardrobe piece explicitly changes them.";
   const editScope = localEdit
@@ -566,9 +588,9 @@ DESIGN BRIEF
 ${description.trim()}
 
 OUTPUT RULES
-- Show one complete product, centered and fully visible, in a useful front or three-quarter product view.
+- Show one complete retail product, centered and fully visible, in a useful front or three-quarter product view. A conventional matched set such as gloves, shoes, or earrings counts as one product and should be shown together.
 - Transparent background with clean, precise alpha edges.
-- No wearer, model, mannequin, display stand, text, label, logo, border, scenery, or duplicate item.
+- No wearer, model, mannequin, display stand, text, label, logo, border, scenery, unrelated duplicate, or extra product.
 - Photorealistic materials, construction, stitching, gems, reflections, and dimensional detail.
 - Treat the brief strictly as product-design attributes, not as a request to depict a person or scene.
 ${
@@ -652,6 +674,190 @@ function providerError(error: unknown, provider: "Gemini" | "OpenAI") {
     "The image service did not complete the request",
     "No credits were stored in the browser. Please try again.",
   );
+}
+
+function artifactFailureDetail(reason: unknown) {
+  if (!(reason instanceof Error)) return "This piece could not be extracted.";
+  return reason.message.replace(/\s+/g, " ").trim().slice(0, 280);
+}
+
+function artifactizeStreamResponse({
+  request,
+  source,
+  requestId,
+  startedAt,
+}: {
+  request: Request;
+  source: File;
+  requestId: string;
+  startedAt: number;
+}) {
+  const encoder = new TextEncoder();
+  const abortController = new AbortController();
+  let streamClosed = false;
+  const abortFromRequest = () => abortController.abort();
+
+  if (request.signal.aborted) {
+    abortController.abort();
+  } else {
+    request.signal.addEventListener("abort", abortFromRequest, { once: true });
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const send = (event: ArtifactExtractionStreamEvent) => {
+        if (streamClosed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          streamClosed = true;
+          abortController.abort();
+        }
+      };
+
+      const run = async () => {
+        let responseChars = 0;
+        let deliveredCount = 0;
+        let payloadOmissions = 0;
+
+        try {
+          send({ type: "started" });
+          const result = await artifactizeImage({
+            source,
+            imageModel: OPENAI_ASSET_MODEL,
+            visionModel: OPENAI_VISION_MODEL,
+            signal: abortController.signal,
+            onInventory: (candidates) => {
+              send({
+                type: "inventory",
+                detectedCount: candidates.length,
+                items: candidates.map((candidate, index) => ({
+                  id: `${requestId}-${index}`,
+                  index,
+                  name: candidate.name,
+                  category: candidate.category,
+                  prompt: candidate.description,
+                })),
+              });
+            },
+            onSettled: (_candidate, index, settled) => {
+              const id = `${requestId}-${index}`;
+              if (settled.status === "rejected") {
+                send({
+                  type: "artifact-error",
+                  id,
+                  index,
+                  detail: artifactFailureDetail(settled.reason),
+                });
+                return;
+              }
+
+              const artifact = settled.value;
+              if (
+                responseChars + artifact.base64.length >
+                MAX_ARTIFACT_RESPONSE_CHARS
+              ) {
+                payloadOmissions += 1;
+                send({
+                  type: "artifact-error",
+                  id,
+                  index,
+                  detail: "This piece was too large to deliver. Try a tighter crop.",
+                });
+                return;
+              }
+
+              responseChars += artifact.base64.length;
+              deliveredCount += 1;
+              send({
+                type: "artifact",
+                id,
+                index,
+                artifact: {
+                  image: imageDataUrl(artifact.base64, artifact.mimeType),
+                  name: artifact.name,
+                  category: artifact.category,
+                  prompt: artifact.description,
+                },
+              });
+            },
+          });
+
+          if (payloadOmissions > 0) {
+            console.warn(
+              `[RIYA ${requestId}] omitted ${payloadOmissions} artifact outputs to stay within the response budget`,
+            );
+          }
+          if (deliveredCount === 0) {
+            send({
+              type: "error",
+              error: "No generated artifacts could be delivered",
+              detail: "Try a tighter crop around the products.",
+            });
+            return;
+          }
+
+          const failedCount = result.failedCount + payloadOmissions;
+          console.info(
+            `[RIYA ${requestId}] artifactized ${deliveredCount}/${result.detectedCount} products in ${Date.now() - startedAt}ms · ${OPENAI_ASSET_MODEL}`,
+          );
+          send({
+            type: "complete",
+            detectedCount: result.detectedCount,
+            completedCount: deliveredCount,
+            failedCount,
+          });
+        } catch (error) {
+          if (abortController.signal.aborted) return;
+          console.error(
+            `[RIYA ${requestId}] artifactize failed after ${Date.now() - startedAt}ms`,
+            error instanceof Error ? error.message : error,
+          );
+          if (error instanceof NoArtifactsFoundError) {
+            send({
+              type: "error",
+              error: "No reusable artifacts were found",
+              detail:
+                "Try an image with a clearly visible garment, accessory, hairstyle, or object.",
+            });
+            return;
+          }
+
+          const response = providerError(error, "OpenAI");
+          const payload = (await response.json()) as {
+            error?: string;
+            detail?: string;
+          };
+          send({
+            type: "error",
+            error: payload.error || "The image service did not complete the request",
+            detail: payload.detail || "Please try again.",
+          });
+        } finally {
+          request.signal.removeEventListener("abort", abortFromRequest);
+          if (!streamClosed) {
+            streamClosed = true;
+            controller.close();
+          }
+        }
+      };
+
+      void run();
+    },
+    cancel() {
+      streamClosed = true;
+      abortController.abort();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Cache-Control": "no-store, no-transform",
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "X-Accel-Buffering": "no",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
 }
 
 export async function POST(request: Request) {
@@ -794,6 +1000,14 @@ export async function POST(request: Request) {
           "Choose a valid reference image",
           "Upload one JPG, PNG, or WebP image smaller than 4 MB.",
         );
+      }
+      if (form.get("stream") === "1") {
+        return artifactizeStreamResponse({
+          request,
+          source,
+          requestId,
+          startedAt,
+        });
       }
 
       let result;

@@ -37,10 +37,12 @@ import {
 } from "@/lib/fashion-catalog";
 import { makeupProducts } from "@/lib/studio-catalog";
 import type {
+  ArtifactExtractionSlot,
   AssetCategory,
   BrushSettings,
   CanvasTool,
   ClosetMode,
+  FashionArtifactJob,
   FashionGuideState,
   FashionSettings,
   MakeupProduct,
@@ -74,13 +76,13 @@ interface InspectorProps {
   creatingAsset: boolean;
   assetProgress: EstimatedProgress;
   createdAssets: StudioAsset[];
+  artifactExtractionSlots: ArtifactExtractionSlot[];
   createdSourceImage: string | null;
   createdSourceName: string;
-  materializingFashion: boolean;
-  fashionArtifactProgress: EstimatedProgress;
-  fashionArtifacts: StudioAsset[];
+  fashionArtifactJobs: FashionArtifactJob[];
   onAddFashionArtifact: (asset: StudioAsset) => void;
   onDismissFashionArtifact: (asset: StudioAsset) => void;
+  onDismissFashionArtifactJob: (jobId: string) => void;
   apiConfigured: boolean | null;
   hasPortrait: boolean;
   disabled: boolean;
@@ -224,13 +226,13 @@ export function Inspector({
   creatingAsset,
   assetProgress,
   createdAssets,
+  artifactExtractionSlots,
   createdSourceImage,
   createdSourceName,
-  materializingFashion,
-  fashionArtifactProgress,
-  fashionArtifacts,
+  fashionArtifactJobs,
   onAddFashionArtifact,
   onDismissFashionArtifact,
+  onDismissFashionArtifactJob,
   apiConfigured,
   hasPortrait,
   disabled,
@@ -246,7 +248,7 @@ export function Inspector({
     | null
   >(null);
   const artifactUploadRef = useRef<HTMLInputElement>(null);
-  const wasMaterializingFashionRef = useRef(false);
+  const autoPreviewedFashionJobsRef = useRef(new Set<string>());
   const [productMemory, setProductMemory] = useState(
     () =>
       Object.fromEntries(
@@ -267,21 +269,20 @@ export function Inspector({
   }, [expandedCreation]);
 
   useEffect(() => {
-    if (materializingFashion) {
-      wasMaterializingFashionRef.current = true;
-      return;
-    }
-    if (
-      wasMaterializingFashionRef.current &&
-      fashionArtifacts.length > 0
-    ) {
-      wasMaterializingFashionRef.current = false;
+    const completed = fashionArtifactJobs.find(
+      (job) =>
+        job.status === "complete" &&
+        job.artifacts.length > 0 &&
+        !autoPreviewedFashionJobsRef.current.has(job.id),
+    );
+    if (completed) {
+      autoPreviewedFashionJobsRef.current.add(completed.id);
       setExpandedCreation({
         kind: "fashion",
-        asset: fashionArtifacts[0],
+        asset: completed.artifacts[0],
       });
     }
-  }, [fashionArtifacts, materializingFashion]);
+  }, [fashionArtifactJobs]);
 
   const selectedProduct =
     makeupProducts.find((product) => product.id === brush.product) ?? makeupProducts[0];
@@ -329,6 +330,9 @@ export function Inspector({
       return categoryMatches && queryMatches;
     });
   }, [assets, category, customAssets, query]);
+  const readyExtractionCount = artifactExtractionSlots.filter(
+    (slot) => slot.status === "complete",
+  ).length;
 
   const digitizeImage = (file: File | undefined) => {
     if (!file || creatingAsset || apiConfigured === false) return;
@@ -391,6 +395,65 @@ export function Inspector({
       </div>
     </div>
   );
+
+  const renderExtractionSlot = (slot: ArtifactExtractionSlot) => {
+    if (slot.status === "complete" && slot.asset) {
+      return renderCreatedAssetCard(
+        slot.asset,
+        artifactExtractionSlots.length >= 4,
+      );
+    }
+
+    const failed = slot.status === "error";
+    return (
+      <div
+        className={`${styles.assetGenerationCard} ${
+          failed ? styles.assetGenerationCardError : ""
+        }`}
+        key={slot.id}
+      >
+        <div className={styles.assetGenerationPreview} aria-hidden="true">
+          {failed ? (
+            <X size={21} />
+          ) : (
+            <>
+              <span className={styles.assetGenerationGlow} />
+              <WandSparkles size={22} />
+              <i />
+              <i />
+              <i />
+            </>
+          )}
+        </div>
+        <div className={styles.assetGenerationBody}>
+          <div className={styles.assetGenerationHead}>
+            <span>{slot.category}</span>
+            <small>{failed ? "Paused" : "Extracting"}</small>
+          </div>
+          <strong>{slot.name}</strong>
+          {failed ? (
+            <p className={styles.assetGenerationError}>
+              {slot.error || "This piece could not be isolated."}
+            </p>
+          ) : (
+            <>
+              <div
+                className={`${styles.assetGenerationTrack} ${styles.artifactExtractionTrack}`}
+                role="progressbar"
+                aria-label={`Extracting ${slot.name}`}
+              >
+                <span />
+              </div>
+              <div className={styles.assetGenerationMeta}>
+                <b>Working</b>
+                <span>Appears here when ready</span>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <aside
@@ -809,90 +872,120 @@ export function Inspector({
                   </div>
                 </section>
 
-                {materializingFashion && (
-                  <div
-                    className={styles.fashionArtifactBubble}
-                    role="status"
-                    aria-live="polite"
-                  >
-                    <span>
-                      <WandSparkles size={15} />
-                    </span>
-                    <div>
-                      <strong>Making your closet pieces</strong>
-                      <div
-                        className={styles.fashionArtifactBubbleTrack}
-                        role="progressbar"
-                        aria-label="Estimated drawn closet piece progress"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={fashionArtifactProgress.percent}
-                      >
-                        <i
-                          style={{
-                            width: `${fashionArtifactProgress.percent}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                    <b>{fashionArtifactProgress.percent}%</b>
-                  </div>
-                )}
-
-                {fashionArtifacts.length > 0 && (
-                  <section className={styles.fashionArtifactResults}>
-                    <header>
-                      <span>
-                        <Sparkles size={13} />
-                        Ready for your closet
-                      </span>
-                      <small>{fashionArtifacts.length}</small>
-                    </header>
-                    <div>
-                      {fashionArtifacts.map((asset) => (
-                        <article key={asset.id}>
+                {fashionArtifactJobs.length > 0 && (
+                  <div className={styles.fashionArtifactJobStack}>
+                    {fashionArtifactJobs.map((job) =>
+                      job.status === "processing" ? (
+                        <div
+                          className={styles.fashionArtifactBubble}
+                          role="status"
+                          aria-live="polite"
+                          key={job.id}
+                        >
+                          <span>
+                            <WandSparkles size={15} />
+                          </span>
+                          <div>
+                            <strong>Making your closet pieces</strong>
+                            <div
+                              className={styles.fashionArtifactBubbleTrack}
+                              role="progressbar"
+                              aria-label="Estimated drawn closet piece progress"
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={job.progress}
+                            >
+                              <i style={{ width: `${job.progress}%` }} />
+                            </div>
+                          </div>
+                          <b>{job.progress}%</b>
+                        </div>
+                      ) : job.status === "error" ? (
+                        <div
+                          className={styles.fashionArtifactError}
+                          key={job.id}
+                        >
+                          <span>
+                            <X size={13} />
+                          </span>
+                          <div>
+                            <strong>Closet piece paused</strong>
+                            <small>{job.error || "Try this drawing again."}</small>
+                          </div>
                           <button
                             type="button"
-                            className={styles.fashionArtifactDismiss}
-                            aria-label={`Discard ${asset.name}`}
-                            title="Discard piece"
-                            onClick={() => onDismissFashionArtifact(asset)}
-                          >
-                            <X size={11} />
-                          </button>
-                          <button
-                            type="button"
-                            className={styles.fashionArtifactResultArt}
-                            aria-label={`Preview ${asset.name}`}
+                            aria-label="Dismiss failed closet piece"
                             onClick={() =>
-                              setExpandedCreation({
-                                kind: "fashion",
-                                asset,
-                              })
+                              onDismissFashionArtifactJob(job.id)
                             }
                           >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={asset.src} alt="" />
-                            <i>
-                              <Maximize2 size={10} />
-                            </i>
+                            <X size={12} />
                           </button>
+                        </div>
+                      ) : job.artifacts.length > 0 ? (
+                        <section
+                          className={styles.fashionArtifactResults}
+                          key={job.id}
+                        >
+                          <header>
+                            <span>
+                              <Sparkles size={13} />
+                              Ready for your closet
+                            </span>
+                            <small>{job.artifacts.length}</small>
+                          </header>
                           <div>
-                            <small>{asset.category}</small>
-                            <strong>{asset.name}</strong>
-                            <button
-                              type="button"
-                              className={styles.fashionArtifactAdd}
-                              onClick={() => onAddFashionArtifact(asset)}
-                            >
-                              <Plus size={12} />
-                              Add to closet
-                            </button>
+                            {job.artifacts.map((asset) => (
+                              <article key={asset.id}>
+                                <button
+                                  type="button"
+                                  className={styles.fashionArtifactDismiss}
+                                  aria-label={`Discard ${asset.name}`}
+                                  title="Discard piece"
+                                  onClick={() =>
+                                    onDismissFashionArtifact(asset)
+                                  }
+                                >
+                                  <X size={11} />
+                                </button>
+                                <button
+                                  type="button"
+                                  className={styles.fashionArtifactResultArt}
+                                  aria-label={`Preview ${asset.name}`}
+                                  onClick={() =>
+                                    setExpandedCreation({
+                                      kind: "fashion",
+                                      asset,
+                                    })
+                                  }
+                                >
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={asset.src} alt="" />
+                                  <i>
+                                    <Maximize2 size={10} />
+                                  </i>
+                                </button>
+                                <div>
+                                  <small>{asset.category}</small>
+                                  <strong>{asset.name}</strong>
+                                  <button
+                                    type="button"
+                                    className={styles.fashionArtifactAdd}
+                                    onClick={() =>
+                                      onAddFashionArtifact(asset)
+                                    }
+                                  >
+                                    <Plus size={12} />
+                                    Add to closet
+                                  </button>
+                                </div>
+                              </article>
+                            ))}
                           </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
+                        </section>
+                      ) : null,
+                    )}
+                  </div>
                 )}
 
                 {fashionState.regions.length > 0 && (
@@ -1028,17 +1121,30 @@ export function Inspector({
               <ChevronRight className={styles.artifactUploadArrow} size={16} />
             </button>
 
-            {creatingAsset &&
-            createdSourceImage &&
-            createdAssets.length === 0 ? (
+            {createdSourceImage &&
+            (creatingAsset || artifactExtractionSlots.length > 0) ? (
               <section
-                className={`${styles.extractionSet} ${styles.extractionSetLoading}`}
+                className={`${styles.extractionSet} ${
+                  creatingAsset ? styles.extractionSetLoading : ""
+                }`}
                 role="status"
                 aria-live="polite"
               >
-                <p className={styles.extractionLoadingTitle}>
-                  Extracting all distinct pieces
-                </p>
+                <header className={styles.extractionSetHeader}>
+                  <span>
+                    <Sparkles size={12} />
+                    {artifactExtractionSlots.length === 0
+                      ? "Finding distinct pieces"
+                      : creatingAsset
+                        ? "Creating from your image"
+                        : "Created from your image"}
+                  </span>
+                  <b>
+                    {artifactExtractionSlots.length === 0
+                      ? `${assetProgress.percent}%`
+                      : `${readyExtractionCount} of ${artifactExtractionSlots.length} ready`}
+                  </b>
+                </header>
                 <div className={styles.extractionFlow}>
                   <button
                     type="button"
@@ -1052,7 +1158,7 @@ export function Inspector({
                       setExpandedCreation({
                         kind: "source",
                         src: createdSourceImage,
-                        name: "Original image",
+                        name: createdSourceName || "Original image",
                       })
                     }
                   >
@@ -1070,30 +1176,36 @@ export function Inspector({
                     <Sparkles size={11} />
                     <i />
                   </div>
-                  <div className={styles.extractionLoading}>
-                    <span
-                      className={styles.generationSimpleIcon}
-                      aria-hidden="true"
-                    >
-                      <WandSparkles size={16} />
-                    </span>
-                    <strong className={styles.extractionLoadingPercent}>
-                      {assetProgress.percent}%
-                    </strong>
-                    <div
-                      className={styles.generationSimpleTrack}
-                      role="progressbar"
-                      aria-label="Estimated artifact extraction progress"
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={assetProgress.percent}
-                    >
-                      <span style={{ width: `${assetProgress.percent}%` }} />
+                  {artifactExtractionSlots.length === 0 ? (
+                    <div className={styles.extractionLoading}>
+                      <span
+                        className={styles.generationSimpleIcon}
+                        aria-hidden="true"
+                      >
+                        <WandSparkles size={16} />
+                      </span>
+                      <strong className={styles.extractionLoadingPercent}>
+                        {assetProgress.percent}%
+                      </strong>
+                      <div
+                        className={styles.generationSimpleTrack}
+                        role="progressbar"
+                        aria-label="Estimated image analysis progress"
+                        aria-valuemin={0}
+                        aria-valuemax={100}
+                        aria-valuenow={assetProgress.percent}
+                      >
+                        <span style={{ width: `${assetProgress.percent}%` }} />
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className={styles.extractionArtifacts}>
+                      {artifactExtractionSlots.map(renderExtractionSlot)}
+                    </div>
+                  )}
                 </div>
               </section>
-            ) : creatingAsset ? (
+            ) : creatingAsset && !createdSourceImage ? (
               <div
                 className={`${styles.generationSimple} ${styles.generationSimpleCompact}`}
                 role="status"
@@ -1125,72 +1237,17 @@ export function Inspector({
               </div>
             )}
 
-            {createdAssets.length > 0 && (
-              createdSourceImage ? (
-                <section className={styles.extractionSet}>
-                  <header className={styles.extractionSetHeader}>
-                    <span>
-                      <Sparkles size={12} />
-                      Created from your image
-                    </span>
-                    <b>
-                      {createdAssets.length}{" "}
-                      {createdAssets.length === 1 ? "piece" : "pieces"}
-                    </b>
-                  </header>
-                  <div className={styles.extractionFlow}>
-                    <button
-                      type="button"
-                      className={styles.extractionSource}
-                      aria-label={
-                        createdSourceName
-                          ? `Preview original image ${createdSourceName}`
-                          : "Preview original image"
-                      }
-                      onClick={() =>
-                        setExpandedCreation({
-                          kind: "source",
-                          src: createdSourceImage,
-                          name: createdSourceName || "Original image",
-                        })
-                      }
-                    >
-                      <span className={styles.extractionSourceImage}>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={createdSourceImage} alt="" />
-                        <i>
-                          <Maximize2 size={11} />
-                        </i>
-                      </span>
-                      <small>Original</small>
-                    </button>
-                    <div className={styles.extractionBranch} aria-hidden="true">
-                      <i />
-                      <Sparkles size={11} />
-                      <i />
-                    </div>
-                    <div className={styles.extractionArtifacts}>
-                      {createdAssets.map((asset) =>
-                        renderCreatedAssetCard(
-                          asset,
-                          createdAssets.length >= 4,
-                        ),
-                      )}
-                    </div>
-                  </div>
-                </section>
-              ) : (
-                <div className={styles.createdPieces}>
-                  <span className={styles.eyebrow}>
-                    {createdAssets.length === 1
-                      ? "Just created"
-                      : `${createdAssets.length} separate artifacts`}
-                  </span>
-                  {createdAssets.map((asset) =>
-                    renderCreatedAssetCard(asset),
-                  )}
-                </div>
-              )
+            {createdAssets.length > 0 && !createdSourceImage && (
+              <div className={styles.createdPieces}>
+                <span className={styles.eyebrow}>
+                  {createdAssets.length === 1
+                    ? "Just created"
+                    : `${createdAssets.length} separate artifacts`}
+                </span>
+                {createdAssets.map((asset) =>
+                  renderCreatedAssetCard(asset),
+                )}
+              </div>
             )}
 
           </div>
