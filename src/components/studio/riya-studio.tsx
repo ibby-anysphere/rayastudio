@@ -1578,86 +1578,88 @@ export function RiyaStudio() {
 
         <div className={styles.workbench}>
           <section className={styles.canvasColumn}>
-            <div
-              className={`${styles.canvasTools} ${
-                interactionMode === "fashion" ? styles.canvasToolsFashion : ""
-              }`}
-              inert={generating ? true : undefined}
-            >
-              {interactionMode === "fashion" ? (
-                <>
-                  <button
-                    className={
-                      tool === "pencil" ? styles.canvasToolActive : styles.canvasTool
-                    }
-                    onClick={() => setTool("pencil")}
-                    title="Draw a smooth fashion outline"
-                  >
-                    <PenLine size={16} />
-                  </button>
-                  <button
-                    className={
-                      tool === "fill" ? styles.canvasToolActive : styles.canvasTool
-                    }
-                    onClick={() => setTool("fill")}
-                    title="Fill inside a shape"
-                  >
-                    <PaintBucket size={16} />
-                  </button>
-                  <button
-                    className={
-                      tool === "eraser" ? styles.canvasToolActive : styles.canvasTool
-                    }
-                    onClick={() => setTool("eraser")}
-                    title="Erase part of the fashion sketch"
-                  >
-                    <Eraser size={16} />
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className={
-                      tool === "brush" ? styles.canvasToolActive : styles.canvasTool
-                    }
-                    onClick={() => {
-                      setTool("brush");
-                      setTab("makeup");
-                    }}
-                    title="Paint makeup guide"
-                  >
-                    <Brush size={16} />
-                  </button>
-                  <button
-                    className={
-                      tool === "eraser" && interactionMode === "makeup"
-                        ? styles.canvasToolActive
-                        : styles.canvasTool
-                    }
-                    onClick={() => {
-                      setTool("eraser");
-                      setTab("makeup");
-                    }}
-                    title="Erase makeup guide"
-                  >
-                    <Eraser size={16} />
-                  </button>
-                </>
-              )}
-              <span />
-              <button
-                className={styles.canvasTool}
-                onClick={() => canvasRef.current?.undoGuide()}
-                disabled={
-                  interactionMode === "fashion"
-                    ? !fashionState.canUndo
-                    : !guideState.canUndo
-                }
-                title="Undo last mark"
+            {currentImage && (
+              <div
+                className={`${styles.canvasTools} ${
+                  interactionMode === "fashion" ? styles.canvasToolsFashion : ""
+                }`}
+                inert={generating ? true : undefined}
               >
-                <Undo2 size={16} />
-              </button>
-            </div>
+                {interactionMode === "fashion" ? (
+                  <>
+                    <button
+                      className={
+                        tool === "pencil" ? styles.canvasToolActive : styles.canvasTool
+                      }
+                      onClick={() => setTool("pencil")}
+                      title="Draw a smooth fashion outline"
+                    >
+                      <PenLine size={16} />
+                    </button>
+                    <button
+                      className={
+                        tool === "fill" ? styles.canvasToolActive : styles.canvasTool
+                      }
+                      onClick={() => setTool("fill")}
+                      title="Fill inside a shape"
+                    >
+                      <PaintBucket size={16} />
+                    </button>
+                    <button
+                      className={
+                        tool === "eraser" ? styles.canvasToolActive : styles.canvasTool
+                      }
+                      onClick={() => setTool("eraser")}
+                      title="Erase part of the fashion sketch"
+                    >
+                      <Eraser size={16} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className={
+                        tool === "brush" ? styles.canvasToolActive : styles.canvasTool
+                      }
+                      onClick={() => {
+                        setTool("brush");
+                        setTab("makeup");
+                      }}
+                      title="Paint makeup guide"
+                    >
+                      <Brush size={16} />
+                    </button>
+                    <button
+                      className={
+                        tool === "eraser" && interactionMode === "makeup"
+                          ? styles.canvasToolActive
+                          : styles.canvasTool
+                      }
+                      onClick={() => {
+                        setTool("eraser");
+                        setTab("makeup");
+                      }}
+                      title="Erase makeup guide"
+                    >
+                      <Eraser size={16} />
+                    </button>
+                  </>
+                )}
+                <span />
+                <button
+                  className={styles.canvasTool}
+                  onClick={() => canvasRef.current?.undoGuide()}
+                  disabled={
+                    interactionMode === "fashion"
+                      ? !fashionState.canUndo
+                      : !guideState.canUndo
+                  }
+                  title="Undo last mark"
+                >
+                  <Undo2 size={16} />
+                </button>
+              </div>
+            )}
 
             <CanvasStage
               ref={canvasRef}
@@ -1764,7 +1766,7 @@ export function RiyaStudio() {
                     disabled={generating}
                   >
                     <Sparkles size={14} />
-                    <strong>Pro</strong>
+                    <strong>Quality</strong>
                     {renderMode === "max" && <Check size={12} />}
                   </button>
                 </div>

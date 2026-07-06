@@ -4468,6 +4468,54 @@
   }
 }
 
+@media (max-width: 920px) {
+  .promptDock {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 102px;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 15px;
+  }
+
+  .renderModePanel {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .renderModeOptions {
+    min-width: 0;
+    gap: 3px;
+  }
+
+  .renderMode,
+  .renderModeActive {
+    min-width: 0;
+    min-height: 44px;
+    grid-template-columns: 16px minmax(0, 1fr) 12px;
+    gap: 3px;
+    padding: 4px 5px;
+    border-radius: 8px;
+  }
+
+  .renderMode strong,
+  .renderModeActive strong {
+    font-size: 10px;
+  }
+
+  .applyButton {
+    min-width: 0;
+    height: 44px;
+    padding: 0 11px;
+    border-radius: 10px;
+  }
+}
+
 @media (max-width: 680px) {
   .appShell {
     height: auto;
@@ -4590,6 +4638,30 @@
     padding-left: 28px;
   }
 
+  .emptyStage {
+    padding: 58px 42px 90px;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .emptyArt {
+    width: min(210px, 62%);
+    flex: 0 0 auto;
+  }
+
+  .emptyCopy {
+    max-width: 330px;
+    flex: 0 0 auto;
+    align-items: center;
+    text-align: center;
+  }
+
+  .emptyCopy h2 {
+    max-width: 330px;
+    margin-top: 7px;
+    font-size: 34px;
+  }
+
   .panelStack {
     padding-right: 12px;
     padding-left: 12px;
@@ -4635,7 +4707,7 @@
 
   .stageViewport,
   .emptyStage {
-    padding: 58px 48px 142px;
+    padding: 58px 48px 90px;
   }
 
   .emptyStage {
@@ -4676,15 +4748,18 @@
   }
 
   .canvasTools {
-    top: 12px;
+    top: 10px;
     left: 10px;
     flex-direction: row;
+    gap: 3px;
+    padding: 4px;
+    border-radius: 12px;
   }
 
   .canvasTools > span {
     width: 1px;
-    height: 24px;
-    margin: auto 3px;
+    height: 22px;
+    margin: auto 2px;
   }
 
   .stageTopActions {
@@ -4701,12 +4776,12 @@
     right: 9px;
     bottom: 9px;
     left: 9px;
-    min-height: 96px;
-    grid-template-columns: minmax(0, 1fr) 94px;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr) 100px;
   }
 
   .applyButton {
-    min-width: 90px;
+    min-width: 0;
     padding: 0 10px;
   }
 

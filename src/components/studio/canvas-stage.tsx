@@ -1376,7 +1376,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       );
       const availableHeight = Math.max(
         150,
-        viewportBounds.height - (mobile ? 200 : 188),
+        viewportBounds.height - (mobile ? 148 : 188),
       );
       let displayWidth = Math.min(
         mobile ? 480 : 670,
