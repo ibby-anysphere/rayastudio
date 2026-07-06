@@ -55,7 +55,6 @@ import {
   type AssetCategory,
   type BrushSettings,
   type CanvasTool,
-  type ClosetMode,
   type FashionArtifactJob,
   type FashionGuideState,
   type FashionSettings,
@@ -273,7 +272,6 @@ export function RiyaStudio() {
   >("visible");
   const [tab, setTab] = useState<StudioTab>("makeup");
   const [tool, setTool] = useState<CanvasTool>("brush");
-  const [closetMode, setClosetMode] = useState<ClosetMode>("pieces");
   const [brush, setBrush] = useState<BrushSettings>({
     product: "lipstick",
     color: "#c64f6a",
@@ -335,7 +333,7 @@ export function RiyaStudio() {
   const interactionMode =
     tab === "makeup"
       ? "makeup"
-      : tab === "wardrobe" && closetMode === "draw"
+      : tab === "create"
         ? "fashion"
         : "idle";
 
@@ -554,7 +552,7 @@ export function RiyaStudio() {
         },
       ]);
       setCurrentHistoryId(historyId);
-      setTool(tab === "wardrobe" && closetMode === "draw" ? "pencil" : "brush");
+      setTool(tab === "create" ? "pencil" : "brush");
       setGuideState({ hasMarks: false, canUndo: false, products: [] });
       setFashionState(emptyFashionGuideState());
       setHistoryOpen(false);
@@ -679,18 +677,12 @@ export function RiyaStudio() {
     }
   };
 
-  const changeClosetMode = (mode: ClosetMode) => {
-    setClosetMode(mode);
-    setTab("wardrobe");
-    setSelectedLayerId(null);
-    setTool(mode === "draw" ? "pencil" : "brush");
-  };
-
   const changeTab = (nextTab: StudioTab) => {
     setTab(nextTab);
     if (nextTab === "makeup") {
       setTool((current) => (current === "eraser" ? current : "brush"));
-    } else if (nextTab === "wardrobe" && closetMode === "draw") {
+    } else if (nextTab === "create") {
+      setSelectedLayerId(null);
       setTool((current) =>
         current === "fill" || current === "eraser" ? current : "pencil",
       );
@@ -758,8 +750,7 @@ export function RiyaStudio() {
       },
       ...current,
     ]);
-    setTab("wardrobe");
-    setClosetMode("draw");
+    setTab("create");
     const runJob = async () => {
       const startedAt = performance.now();
       const estimateMs = 62_000 + Math.max(0, fashionGuides.length - 1) * 7_000;
@@ -1682,6 +1673,7 @@ export function RiyaStudio() {
               showOriginal={showOriginal}
               generating={generating}
               generationProgress={portraitGeneration.progress}
+              idleAnimationActive={brandIntroState === "hidden"}
               onUpload={handleUpload}
               onDropAsset={handleDropAsset}
               onSelectLayer={setSelectedLayerId}
@@ -1805,8 +1797,6 @@ export function RiyaStudio() {
             brush={brush}
             onBrushChange={(patch) => setBrush((current) => ({ ...current, ...patch }))}
             onToolChange={setTool}
-            closetMode={closetMode}
-            onClosetModeChange={changeClosetMode}
             fashion={fashion}
             fashionState={fashionState}
             onFashionChange={updateFashionSettings}

@@ -162,7 +162,7 @@ export const makeupProducts: MakeupProduct[] = [
   {
     id: "lipstick",
     name: "Satin lip",
-    shortName: "Lip",
+    shortName: "Lipstick",
     note: "Color and shape",
     instruction: "Trace the natural lip surface",
     src: "/makeup/lipstick.png",
@@ -204,7 +204,7 @@ export const makeupProducts: MakeupProduct[] = [
   {
     id: "eyeshadow",
     name: "Velvet shadow",
-    shortName: "Shadow",
+    shortName: "Eyeshadow",
     note: "Soft eye color",
     instruction: "Paint over the lids and crease",
     src: "/makeup/eyeshadow.png",
@@ -225,7 +225,7 @@ export const makeupProducts: MakeupProduct[] = [
   {
     id: "eyeliner",
     name: "Precision liner",
-    shortName: "Liner",
+    shortName: "Eyeliner",
     note: "Clean definition",
     instruction: "Follow the upper or lower lash line",
     src: "/makeup/eyeliner.png",

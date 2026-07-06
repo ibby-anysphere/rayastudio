@@ -527,6 +527,7 @@
 }
 
 .idleMakeupTag,
+.idleAccessoryTag,
 .idleClothesTag {
   transition:
     width 140ms ease,
@@ -537,6 +538,7 @@
 }
 
 .idleMakeupTag > span,
+.idleAccessoryTag > span,
 .idleClothesTag > span {
   max-width: 64px;
   overflow: hidden;
@@ -547,6 +549,7 @@
 }
 
 .idleMakeupTagTracing,
+.idleAccessoryTagTracing,
 .idleClothesTagTracing {
   width: 27px;
   min-width: 27px;
@@ -558,6 +561,7 @@
 }
 
 .idleMakeupTagTracing > span,
+.idleAccessoryTagTracing > span,
 .idleClothesTagTracing > span {
   max-width: 0;
   opacity: 0;
@@ -1667,6 +1671,10 @@
   font-size: 8px;
 }
 
+.categoryItemCount {
+  flex: 0 0 auto;
+}
+
 .createPromptWrap textarea:focus {
   border-color: rgba(255, 61, 147, 0.58);
   box-shadow: 0 0 0 3px rgba(255, 61, 147, 0.1);
@@ -1769,7 +1777,7 @@
     linear-gradient(155deg, rgba(255, 255, 255, 0.9), rgba(246, 241, 238, 0.72)),
     #faf8f6;
   box-shadow: 0 5px 16px rgba(62, 42, 54, 0.035);
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   transition:
     transform 180ms ease,
@@ -1843,15 +1851,18 @@
 .makeupProductCopy {
   display: flex;
   min-width: 0;
+  align-items: center;
+  justify-content: center;
   flex-direction: column;
   gap: 2px;
 }
 
 .makeupProductCopy strong {
   overflow: hidden;
-  color: #55464f;
-  font-size: 8px;
-  font-weight: 720;
+  align-self: center;
+  color: var(--brand-plum);
+  font-size: 10px;
+  font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1994,52 +2005,6 @@
     0 0 0 2px #805267,
     0 5px 10px rgba(65, 42, 54, 0.2);
   transform: translateY(-1px) scale(1.025);
-}
-
-.makeupTools {
-  padding: 10px 11px 11px;
-  border-top: 1px solid rgba(68, 49, 60, 0.075);
-}
-
-.makeupSize {
-  display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-
-.makeupSize > span {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  color: #71656c;
-  font-size: 6px;
-  font-weight: 650;
-}
-
-.makeupSize b {
-  color: #a0959a;
-  font-size: 5px;
-  font-weight: 520;
-}
-
-.makeupSize input {
-  width: 100%;
-  height: 4px;
-  appearance: none;
-  border-radius: 99px;
-  outline: none;
-}
-
-.makeupSize input::-webkit-slider-thumb {
-  width: 14px;
-  height: 14px;
-  appearance: none;
-  border: 3px solid #fff;
-  border-radius: 50%;
-  background: #744258;
-  box-shadow: 0 1px 6px rgba(66, 39, 53, 0.25);
-  cursor: grab;
 }
 
 .smallNotice,
@@ -2372,6 +2337,32 @@
   line-height: 1.35;
 }
 
+.studioSectionHeading {
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
+
+.creationPathDivider {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: -2px 0 1px;
+}
+
+.creationPathDivider i {
+  height: 1px;
+  background: rgba(61, 5, 51, 0.1);
+}
+
+.creationPathDivider span {
+  color: #2f2530;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.018em;
+}
+
 .createPromptWrap {
   position: relative;
 }
@@ -2421,22 +2412,6 @@
 .createAssetButton:disabled {
   opacity: 0.48;
   cursor: default;
-}
-
-.createOr {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin: 2px 0;
-}
-
-.createOr span {
-  color: #8f4560;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 14px;
-  font-style: italic;
-  font-weight: 600;
-  letter-spacing: 0.1em;
 }
 
 .artifactUpload {
@@ -3524,74 +3499,6 @@
 
 .closetPanel {
   gap: 16px;
-}
-
-.closetModeSwitch {
-  display: grid;
-  min-height: 44px;
-  padding: 4px;
-  grid-template-columns: 1fr 1.24fr;
-  gap: 4px;
-  border: 1px solid rgba(64, 46, 58, 0.1);
-  border-radius: 14px;
-  background: rgba(235, 230, 227, 0.72);
-  box-shadow: inset 0 1px 3px rgba(57, 40, 51, 0.05);
-}
-
-.closetModeSwitch > button {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 7px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: #81757c;
-  background: transparent;
-  font-size: 8px;
-  font-weight: 690;
-  cursor: pointer;
-  transition:
-    color 160ms ease,
-    background 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
-}
-
-.closetModeSwitch > button:hover {
-  color: #5d4654;
-}
-
-.closetModeSwitch > .closetModeActive {
-  border-color: rgba(255, 61, 147, 0.22);
-  color: var(--brand-plum);
-  background:
-    radial-gradient(circle at 80% 0, rgba(255, 61, 147, 0.13), transparent 42%),
-    rgba(255, 255, 255, 0.92);
-  box-shadow:
-    0 5px 14px rgba(64, 42, 56, 0.09),
-    inset 0 1px 0 #fff;
-  transform: translateY(-1px);
-}
-
-.closetModeSwitch > button > span {
-  position: absolute;
-  top: -9px;
-  right: -3px;
-  display: inline-flex;
-  height: 19px;
-  align-items: center;
-  padding: 0 7px;
-  border: 1px solid var(--brand-plum);
-  border-radius: 999px;
-  color: var(--brand-plum);
-  background: linear-gradient(135deg, var(--brand-pink), var(--brand-coral));
-  font-size: 6px;
-  font-weight: 800;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .fashionStudio {

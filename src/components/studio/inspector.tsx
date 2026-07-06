@@ -16,7 +16,6 @@ import {
   Maximize2,
   Minimize2,
   Palette,
-  PenLine,
   Plus,
   Search,
   Sparkles,
@@ -41,7 +40,6 @@ import type {
   AssetCategory,
   BrushSettings,
   CanvasTool,
-  ClosetMode,
   FashionArtifactJob,
   FashionGuideState,
   FashionSettings,
@@ -59,8 +57,6 @@ interface InspectorProps {
   brush: BrushSettings;
   onBrushChange: (patch: Partial<BrushSettings>) => void;
   onToolChange: (tool: CanvasTool) => void;
-  closetMode: ClosetMode;
-  onClosetModeChange: (mode: ClosetMode) => void;
   fashion: FashionSettings;
   fashionState: FashionGuideState;
   onFashionChange: (patch: Partial<FashionSettings>) => void;
@@ -209,8 +205,6 @@ export function Inspector({
   brush,
   onBrushChange,
   onToolChange,
-  closetMode,
-  onClosetModeChange,
   fashion,
   fashionState,
   onFashionChange,
@@ -289,6 +283,16 @@ export function Inspector({
   const selectedShade =
     selectedProduct.shades.find((shade) => shade.color === brush.color) ??
     selectedProduct.shades[0];
+  const makeupSizeOptions = [
+    { label: "Small", size: selectedProduct.minSize, previewSize: 14 },
+    { label: "Medium", size: selectedProduct.defaultSize, previewSize: 21 },
+    { label: "Large", size: selectedProduct.maxSize, previewSize: 28 },
+  ];
+  const selectedMakeupSize = makeupSizeOptions.reduce((closest, option) =>
+    Math.abs(option.size - brush.size) < Math.abs(closest.size - brush.size)
+      ? option
+      : closest,
+  );
 
   const selectMakeupProduct = (product: MakeupProduct) => {
     const remembered = productMemory[product.id];
@@ -589,69 +593,212 @@ export function Inspector({
                 </div>
               </div>
 
-              <div className={styles.makeupTools}>
-                <label className={styles.makeupSize}>
-                  <span>
-                    Brush size
-                    <b>{brush.size}px</b>
-                  </span>
-                  <input
-                    type="range"
-                    min={selectedProduct.minSize}
-                    max={selectedProduct.maxSize}
-                    value={brush.size}
-                    style={{
-                      background: `linear-gradient(90deg, ${brush.color}, ${brush.color}36)`,
-                    }}
-                    onChange={(event) =>
-                      updateMakeupBrush({ size: Number(event.target.value) })
-                    }
-                  />
-                </label>
+            </section>
+
+            <section className={styles.fashionControlSection}>
+              <div className={styles.fashionControlHead}>
+                <span>Brush size</span>
+              </div>
+              <div
+                className={styles.fashionPenSizes}
+                role="radiogroup"
+                aria-label={`${selectedProduct.name} brush size`}
+              >
+                {makeupSizeOptions.map((option) => {
+                  const selected = selectedMakeupSize.size === option.size;
+                  return (
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      aria-label={`${option.label} ${selectedProduct.shortName} brush, ${option.size} pixels`}
+                      className={
+                        selected
+                          ? styles.fashionPenSizeActive
+                          : styles.fashionPenSize
+                      }
+                      key={option.label}
+                      onClick={() => updateMakeupBrush({ size: option.size })}
+                    >
+                      <i
+                        style={{
+                          width: `${option.previewSize}px`,
+                          height: `${option.previewSize}px`,
+                          background: brush.color,
+                          opacity: Math.max(0.58, selectedProduct.opacity),
+                        }}
+                      />
+                      <span>{option.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </section>
           </div>
         )}
 
-        {tab === "wardrobe" && (
+        {(tab === "wardrobe" || tab === "create") && (
           <div className={`${styles.panelStack} ${styles.closetPanel}`}>
-            <div
-              className={styles.closetModeSwitch}
-              role="tablist"
-              aria-label="Closet mode"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={closetMode === "pieces"}
-                className={closetMode === "pieces" ? styles.closetModeActive : ""}
-                onClick={() => onClosetModeChange("pieces")}
-              >
-                <Gem size={14} />
-                My pieces
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={closetMode === "draw"}
-                className={closetMode === "draw" ? styles.closetModeActive : ""}
-                onClick={() => onClosetModeChange("draw")}
-              >
-                <PenLine size={14} />
-                Draw anything
-                <span>Magic</span>
-              </button>
-            </div>
-
-            {closetMode === "pieces" ? (
+            {tab === "wardrobe" ? (
               <>
-                <div className={styles.panelHeading}>
-                  <div>
-                    <span className={styles.eyebrow}>The closet</span>
-                    <h2>Drag on every detail</h2>
+                <p
+                  className={`${styles.createMethodDescription} ${styles.studioSectionHeading}`}
+                >
+                  Turn any image into new pieces for your closet
+                </p>
+
+                <input
+                  ref={artifactUploadRef}
+                  className={styles.visuallyHidden}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  aria-label="Choose an image to turn into artifacts"
+                  disabled={creatingAsset || apiConfigured === false}
+                  onChange={(event) => {
+                    digitizeImage(event.currentTarget.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  className={`${styles.artifactUpload} ${
+                    artifactUploadDragging ? styles.artifactUploadDragging : ""
+                  }`}
+                  disabled={creatingAsset || apiConfigured === false}
+                  onClick={() => artifactUploadRef.current?.click()}
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    setArtifactUploadDragging(true);
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDragLeave={(event) => {
+                    if (
+                      !event.currentTarget.contains(
+                        event.relatedTarget as Node | null,
+                      )
+                    ) {
+                      setArtifactUploadDragging(false);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setArtifactUploadDragging(false);
+                    digitizeImage(event.dataTransfer.files?.[0]);
+                  }}
+                >
+                  <span className={styles.artifactUploadIcon}>
+                    <Upload size={18} />
+                  </span>
+                  <span className={styles.artifactUploadCopy}>
+                    <strong>Upload an image</strong>
+                  </span>
+                  <ChevronRight
+                    className={styles.artifactUploadArrow}
+                    size={16}
+                  />
+                </button>
+
+                {createdSourceImage &&
+                (creatingAsset || artifactExtractionSlots.length > 0) ? (
+                  <section
+                    className={`${styles.extractionSet} ${
+                      creatingAsset ? styles.extractionSetLoading : ""
+                    }`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <header className={styles.extractionSetHeader}>
+                      <span>
+                        <Sparkles size={12} />
+                        {artifactExtractionSlots.length === 0
+                          ? "Finding distinct pieces"
+                          : creatingAsset
+                            ? "Creating from your image"
+                            : "Created from your image"}
+                      </span>
+                      <b>
+                        {artifactExtractionSlots.length === 0
+                          ? `${assetProgress.percent}%`
+                          : `${readyExtractionCount} of ${artifactExtractionSlots.length} ready`}
+                      </b>
+                    </header>
+                    <div className={styles.extractionFlow}>
+                      <button
+                        type="button"
+                        className={styles.extractionSource}
+                        aria-label={
+                          createdSourceName
+                            ? `Preview original image ${createdSourceName}`
+                            : "Preview original image"
+                        }
+                        onClick={() =>
+                          setExpandedCreation({
+                            kind: "source",
+                            src: createdSourceImage,
+                            name: createdSourceName || "Original image",
+                          })
+                        }
+                      >
+                        <span className={styles.extractionSourceImage}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={createdSourceImage} alt="" />
+                          <i>
+                            <Maximize2 size={11} />
+                          </i>
+                        </span>
+                        <small>Original</small>
+                      </button>
+                      <div
+                        className={styles.extractionBranch}
+                        aria-hidden="true"
+                      >
+                        <i />
+                        <Sparkles size={11} />
+                        <i />
+                      </div>
+                      {artifactExtractionSlots.length === 0 ? (
+                        <div className={styles.extractionLoading}>
+                          <span
+                            className={styles.generationSimpleIcon}
+                            aria-hidden="true"
+                          >
+                            <WandSparkles size={16} />
+                          </span>
+                          <strong className={styles.extractionLoadingPercent}>
+                            {assetProgress.percent}%
+                          </strong>
+                          <div
+                            className={styles.generationSimpleTrack}
+                            role="progressbar"
+                            aria-label="Estimated image analysis progress"
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                            aria-valuenow={assetProgress.percent}
+                          >
+                            <span
+                              style={{ width: `${assetProgress.percent}%` }}
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className={styles.extractionArtifacts}>
+                          {artifactExtractionSlots.map(renderExtractionSlot)}
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                ) : null}
+
+                {apiConfigured === false && (
+                  <div className={styles.apiNotice}>
+                    <span>API key needed</span>
+                    Add a fresh <code>OPENAI_API_KEY</code> to{" "}
+                    <code>.env.local</code>, then restart.
                   </div>
-                  <span className={styles.itemCount}>{visibleAssets.length}</span>
-                </div>
+                )}
 
                 <label className={styles.searchField}>
                   <Search size={15} />
@@ -674,6 +821,12 @@ export function Inspector({
                       {item.label}
                     </button>
                   ))}
+                  <span
+                    className={`${styles.itemCount} ${styles.categoryItemCount}`}
+                    aria-label={`${visibleAssets.length} visible pieces`}
+                  >
+                    {visibleAssets.length}
+                  </span>
                 </div>
 
                 {customAssets.length > 0 && !query && category === "all" && (
@@ -1036,15 +1189,17 @@ export function Inspector({
 
         {tab === "create" && (
           <div className={styles.panelStack}>
-            <p className={styles.createMethodDescription}>
-              Describe any new piece for your closet!
-            </p>
+            <div className={styles.creationPathDivider} aria-hidden="true">
+              <i />
+              <span>Or describe it</span>
+              <i />
+            </div>
 
             <div className={styles.createPromptWrap}>
               <textarea
                 value={createPrompt}
                 onChange={(event) => setCreatePrompt(event.target.value)}
-                placeholder="Describe what you want to create…"
+                placeholder="A sparkly blue cape with silver stars…"
                 aria-label="Describe what you want to create"
               />
             </div>
@@ -1064,148 +1219,7 @@ export function Inspector({
               )}
             </button>
 
-            <div className={styles.createOr} aria-hidden="true">
-              <span>OR</span>
-            </div>
-
-            <p className={styles.createMethodDescription}>
-              Turn any image into new pieces for your closet.
-            </p>
-
-            <input
-              ref={artifactUploadRef}
-              className={styles.visuallyHidden}
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              aria-label="Choose an image to turn into artifacts"
-              disabled={creatingAsset || apiConfigured === false}
-              onChange={(event) => {
-                digitizeImage(event.currentTarget.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-            <button
-              type="button"
-              className={`${styles.artifactUpload} ${
-                artifactUploadDragging ? styles.artifactUploadDragging : ""
-              }`}
-              disabled={creatingAsset || apiConfigured === false}
-              onClick={() => artifactUploadRef.current?.click()}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setArtifactUploadDragging(true);
-              }}
-              onDragOver={(event) => {
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "copy";
-              }}
-              onDragLeave={(event) => {
-                if (
-                  !event.currentTarget.contains(event.relatedTarget as Node | null)
-                ) {
-                  setArtifactUploadDragging(false);
-                }
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setArtifactUploadDragging(false);
-                digitizeImage(event.dataTransfer.files?.[0]);
-              }}
-            >
-              <span className={styles.artifactUploadIcon}>
-                <Upload size={18} />
-              </span>
-              <span className={styles.artifactUploadCopy}>
-                <strong>Upload an image</strong>
-              </span>
-              <ChevronRight className={styles.artifactUploadArrow} size={16} />
-            </button>
-
-            {createdSourceImage &&
-            (creatingAsset || artifactExtractionSlots.length > 0) ? (
-              <section
-                className={`${styles.extractionSet} ${
-                  creatingAsset ? styles.extractionSetLoading : ""
-                }`}
-                role="status"
-                aria-live="polite"
-              >
-                <header className={styles.extractionSetHeader}>
-                  <span>
-                    <Sparkles size={12} />
-                    {artifactExtractionSlots.length === 0
-                      ? "Finding distinct pieces"
-                      : creatingAsset
-                        ? "Creating from your image"
-                        : "Created from your image"}
-                  </span>
-                  <b>
-                    {artifactExtractionSlots.length === 0
-                      ? `${assetProgress.percent}%`
-                      : `${readyExtractionCount} of ${artifactExtractionSlots.length} ready`}
-                  </b>
-                </header>
-                <div className={styles.extractionFlow}>
-                  <button
-                    type="button"
-                    className={styles.extractionSource}
-                    aria-label={
-                      createdSourceName
-                        ? `Preview original image ${createdSourceName}`
-                        : "Preview original image"
-                    }
-                    onClick={() =>
-                      setExpandedCreation({
-                        kind: "source",
-                        src: createdSourceImage,
-                        name: createdSourceName || "Original image",
-                      })
-                    }
-                  >
-                    <span className={styles.extractionSourceImage}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={createdSourceImage} alt="" />
-                      <i>
-                        <Maximize2 size={11} />
-                      </i>
-                    </span>
-                    <small>Original</small>
-                  </button>
-                  <div className={styles.extractionBranch} aria-hidden="true">
-                    <i />
-                    <Sparkles size={11} />
-                    <i />
-                  </div>
-                  {artifactExtractionSlots.length === 0 ? (
-                    <div className={styles.extractionLoading}>
-                      <span
-                        className={styles.generationSimpleIcon}
-                        aria-hidden="true"
-                      >
-                        <WandSparkles size={16} />
-                      </span>
-                      <strong className={styles.extractionLoadingPercent}>
-                        {assetProgress.percent}%
-                      </strong>
-                      <div
-                        className={styles.generationSimpleTrack}
-                        role="progressbar"
-                        aria-label="Estimated image analysis progress"
-                        aria-valuemin={0}
-                        aria-valuemax={100}
-                        aria-valuenow={assetProgress.percent}
-                      >
-                        <span style={{ width: `${assetProgress.percent}%` }} />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={styles.extractionArtifacts}>
-                      {artifactExtractionSlots.map(renderExtractionSlot)}
-                    </div>
-                  )}
-                </div>
-              </section>
-            ) : creatingAsset && !createdSourceImage ? (
+            {creatingAsset && !createdSourceImage ? (
               <div
                 className={`${styles.generationSimple} ${styles.generationSimpleCompact}`}
                 role="status"

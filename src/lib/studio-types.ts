@@ -12,7 +12,6 @@ export const MAX_MAKEUP_LAYERS = 4;
 export const MAX_FASHION_LAYERS = 4;
 
 export type StudioTab = "makeup" | "wardrobe" | "create";
-export type ClosetMode = "pieces" | "draw";
 export type CanvasTool = "brush" | "pencil" | "eraser" | "fill";
 export type AssetCategory = "jewelry" | "eyewear" | "hair" | "garment" | "accessory";
 export type MakeupProductId = "lipstick" | "blush" | "eyeshadow" | "eyeliner";

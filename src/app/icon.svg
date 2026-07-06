@@ -1,12 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#765067"/>
-      <stop offset="1" stop-color="#2b202e"/>
-    </linearGradient>
+    <filter id="wandShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#3d0533" flood-opacity=".16"/>
+    </filter>
   </defs>
-  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="none" stroke="#f3d7d0" stroke-opacity=".35" stroke-width="2"/>
-  <path d="M20 46 27 17h12c7 0 11 3 10 9-1 5-5 8-11 9l7 11h-8l-6-11-3 11Zm9-17h6c4 0 6-1 7-4 0-2-2-3-5-3h-6Z" fill="#f7e7df"/>
-  <path d="M45 13c1 4 3 6 7 7-4 1-6 3-7 7-1-4-3-6-7-7 4-1 6-3 7-7Z" fill="#d9adbb"/>
+  <rect width="64" height="64" rx="17" fill="#fffaf2"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="none" stroke="#3d0533" stroke-opacity=".09" stroke-width="2"/>
+  <g
+    transform="translate(7 7) scale(2.08)"
+    fill="none"
+    stroke="#ff3d93"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    filter="url(#wandShadow)"
+  >
+    <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/>
+    <path d="m14 7 3 3"/>
+    <path d="M5 6v4"/>
+    <path d="M19 14v4"/>
+    <path d="M10 2v2"/>
+    <path d="M7 8H3"/>
+    <path d="M21 16h-4"/>
+    <path d="M11 3H9"/>
+  </g>
 </svg>

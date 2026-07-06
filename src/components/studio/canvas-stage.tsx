@@ -13,8 +13,10 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
+  Gem,
   ImagePlus,
   Minus,
+  Palette,
   Plus,
   RotateCw,
   Scaling,
@@ -101,6 +103,7 @@ interface CanvasStageProps {
   showOriginal: boolean;
   generating: boolean;
   generationProgress: EstimatedProgress;
+  idleAnimationActive: boolean;
   onUpload: (file: File) => void;
   onDropAsset: (assetId: string, x: number, y: number) => void;
   onSelectLayer: (instanceId: string | null) => void;
@@ -257,7 +260,7 @@ function fashionMaskDimensions(width: number, height: number, maxDimension = 768
 }
 
 const FASHION_FILL_HOLD_MS = 260;
-const IDLE_INITIAL_HOLD_MS = 3_000;
+const IDLE_INITIAL_HOLD_MS = 1_500;
 const IDLE_LIP_APPROACH_START_MS = IDLE_INITIAL_HOLD_MS;
 const IDLE_LIP_TRACE_START_MS = IDLE_LIP_APPROACH_START_MS + 250;
 const IDLE_LIP_TRACE_DURATION_MS = 765;
@@ -274,7 +277,7 @@ const IDLE_CROWN_SETTLED_MS = IDLE_INITIAL_HOLD_MS + 1_800;
 const IDLE_FILL_DURATION_MS = 420;
 const IDLE_POST_FILL_SETTLE_MS = 290;
 const IDLE_AFTER_REVEAL_DURATION_MS = 600;
-const IDLE_FINAL_HOLD_MS = 4_000;
+const IDLE_FINAL_HOLD_MS = 6_000;
 const IDLE_RESET_FADE_MS = 500;
 const IDLE_RESTART_FADE_IN_MS = 250;
 const IDLE_FILL_START_MS =
@@ -295,7 +298,7 @@ const IDLE_BASE_BODY_PATH =
 const IDLE_DRESS_ROUGH_PATH =
   "M132 279c14 13 31 26 56 24 26 2 43-11 56-25 22-2 42 10 51 32 9 19 5 37-18 50-10 23 9 60 23 95-30-4-58 3-87-2-28-4-57 5-85 0-20-3-37 2-52 1 12-36 28-72 24-95-22-10-26-29-20-47 8-22 29-36 52-33Z";
 
-function PortraitPlaceholder() {
+function PortraitPlaceholder({ active }: { active: boolean }) {
   const lipPathRef = useRef<SVGPathElement>(null);
   const dressPathRef = useRef<SVGPathElement>(null);
   const dressFillRef = useRef<SVGGElement>(null);
@@ -310,7 +313,12 @@ function PortraitPlaceholder() {
   const fillPulseCycleRef = useRef(-1);
 
   useEffect(() => {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (
+      !active ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
 
     const lipPath = lipPathRef.current;
     const dressPath = dressPathRef.current;
@@ -459,6 +467,11 @@ function PortraitPlaceholder() {
 
       const accessoryBasePoint = new DOMPoint(364, 207);
       const accessoryTargetPoint = new DOMPoint(184, 69);
+      accessoryTag.classList.toggle(
+        styles.idleAccessoryTagTracing,
+        elapsed >= IDLE_ACCESSORY_MOVE_START_MS &&
+          elapsed < IDLE_ACCESSORY_RETURN_START_MS,
+      );
       if (elapsed < IDLE_ACCESSORY_MOVE_START_MS) {
         placeAt(
           accessoryTag,
@@ -651,7 +664,7 @@ function PortraitPlaceholder() {
 
     frame = window.requestAnimationFrame(tick);
     return () => window.cancelAnimationFrame(frame);
-  }, []);
+  }, [active]);
 
   return (
     <>
@@ -764,7 +777,7 @@ function PortraitPlaceholder() {
       <image
         ref={afterImageRef}
         className={styles.idleAfterImage}
-        href="/brand/raya-idle-after.svg?v=20260706-6"
+        href="/brand/raya-idle-after.svg?v=20260706-17"
         x="0"
         y="0"
         width="360"
@@ -786,14 +799,15 @@ function PortraitPlaceholder() {
         ref={makeupTagRef}
         className={`${styles.floatingTag} ${styles.floatingTagOne} ${styles.idleMakeupTag}`}
       >
-        <WandSparkles size={13} />
+        <Palette size={13} />
         <span>Makeup</span>
       </span>
       <span
         ref={accessoryTagRef}
-        className={`${styles.floatingTag} ${styles.floatingTagTwo}`}
+        className={`${styles.floatingTag} ${styles.floatingTagTwo} ${styles.idleAccessoryTag}`}
       >
-        <ImagePlus size={13} /> Accessories
+        <Gem size={13} />
+        <span>Accessories</span>
       </span>
       <span
         ref={clothesTagRef}
@@ -844,6 +858,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       showOriginal,
       generating,
       generationProgress,
+      idleAnimationActive,
       onUpload,
       onDropAsset,
       onSelectLayer,
@@ -2275,7 +2290,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           />
           <div className={styles.emptyArt}>
             <div className={styles.emptyArtGlow} />
-            <PortraitPlaceholder />
+            <PortraitPlaceholder active={idleAnimationActive} />
           </div>
           <div className={styles.emptyCopy}>
             <h2>Begin with a portrait</h2>
