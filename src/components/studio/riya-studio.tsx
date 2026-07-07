@@ -661,20 +661,8 @@ export function RiyaStudio() {
   }, []);
 
   const updateFashionSettings = (patch: Partial<FashionSettings>) => {
+    canvasRef.current?.selectFashionRegion(null);
     setFashion((current) => ({ ...current, ...patch }));
-    if (fashionState.selectedRegionId) {
-      const stylePatch: Partial<Omit<FashionSettings, "size">> = {};
-      if (patch.category) stylePatch.category = patch.category;
-      if (patch.material) stylePatch.material = patch.material;
-      if (patch.pattern) stylePatch.pattern = patch.pattern;
-      if (patch.color) stylePatch.color = patch.color;
-      if (Object.keys(stylePatch).length > 0) {
-        canvasRef.current?.updateFashionRegionStyle(
-          fashionState.selectedRegionId,
-          stylePatch,
-        );
-      }
-    }
   };
 
   const changeTab = (nextTab: StudioTab) => {

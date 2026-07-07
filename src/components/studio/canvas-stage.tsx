@@ -83,10 +83,6 @@ export interface CanvasStageHandle {
   clearFashionGuide: () => void;
   undoGuide: () => void;
   selectFashionRegion: (regionId: string | null) => void;
-  updateFashionRegionStyle: (
-    regionId: string,
-    patch: Partial<Omit<FashionSettings, "size">>,
-  ) => void;
   hasGuide: () => boolean;
 }
 
@@ -877,6 +873,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
     const surfaceRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const fashionBufferRef = useRef<HTMLCanvasElement | null>(null);
+    const fashionOutlineBufferRef = useRef<HTMLCanvasElement | null>(null);
     const fashionScratchRef = useRef<HTMLCanvasElement | null>(null);
     const brushCursorRef = useRef<HTMLSpanElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -957,24 +954,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       fashionMasksRef.current.clear();
     }, []);
 
-    const rebuildFashionMasks = useCallback(
-      (width: number, height: number) => {
-        releaseFashionMasks();
-        const dimensions = fashionMaskDimensions(width, height);
-        const strokes = fashionStrokes();
-        for (const fill of fashionFills()) {
-          const mask = buildFashionRegionMask(
-            strokes,
-            dimensions.width,
-            dimensions.height,
-            fill.seed,
-          );
-          if (mask) fashionMasksRef.current.set(fill.id, mask);
-        }
-      },
-      [fashionFills, fashionStrokes, releaseFashionMasks],
-    );
-
     const renderFashionLayer = useCallback(
       (
         target: CanvasRenderingContext2D,
@@ -1000,10 +979,20 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           if (!mask) continue;
           drawFashionRegion(context, mask, fill, fillAlpha, scratch);
         }
-        for (const stroke of strokes) {
-          drawFashionStroke(context, stroke, width, height);
-        }
         target.drawImage(buffer, 0, 0, width, height);
+
+        const outlineBuffer =
+          fashionOutlineBufferRef.current ?? document.createElement("canvas");
+        fashionOutlineBufferRef.current = outlineBuffer;
+        if (outlineBuffer.width !== width) outlineBuffer.width = width;
+        if (outlineBuffer.height !== height) outlineBuffer.height = height;
+        const outlineContext = outlineBuffer.getContext("2d");
+        if (!outlineContext) return;
+        outlineContext.clearRect(0, 0, width, height);
+        for (const stroke of strokes) {
+          drawFashionStroke(outlineContext, stroke, width, height);
+        }
+        target.drawImage(outlineBuffer, 0, 0, width, height);
       },
       [fashionFills, fashionStrokes],
     );
@@ -1402,12 +1391,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
 
       canvas.width = nextWidth;
       canvas.height = nextHeight;
-      rebuildFashionMasks(nextWidth, nextHeight);
       renderVisibleGuide();
       refreshFashionState();
     }, [
       aspectRatio,
-      rebuildFashionMasks,
       refreshFashionState,
       renderVisibleGuide,
     ]);
@@ -1462,6 +1449,10 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           fashionBufferRef.current.width = 0;
           fashionBufferRef.current.height = 0;
         }
+        if (fashionOutlineBufferRef.current) {
+          fashionOutlineBufferRef.current.width = 0;
+          fashionOutlineBufferRef.current.height = 0;
+        }
         if (fashionScratchRef.current) {
           fashionScratchRef.current.width = 0;
           fashionScratchRef.current.height = 0;
@@ -1510,11 +1501,20 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
 
     const undoFashionGuide = () => {
       if (fashionOperationsRef.current.length === 0) return;
-      fashionOperationsRef.current.pop();
+      const removed = fashionOperationsRef.current.pop();
+      if (removed?.type === "fill") {
+        const mask = fashionMasksRef.current.get(removed.fill.id);
+        if (mask) {
+          mask.canvas.width = 0;
+          mask.canvas.height = 0;
+        }
+        fashionMasksRef.current.delete(removed.fill.id);
+        if (selectedFashionRegionRef.current === removed.fill.id) {
+          selectedFashionRegionRef.current = null;
+        }
+      }
       activeFashionStrokeRef.current = null;
       drawingRef.current = false;
-      const canvas = canvasRef.current;
-      if (canvas) rebuildFashionMasks(canvas.width, canvas.height);
       renderVisibleGuide();
       refreshFashionState();
     };
@@ -1571,30 +1571,16 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
 
       const fills = fashionFills();
       const strokes = fashionStrokes();
-      const exportMasks = new Map<string, FashionRegionMask>();
-      for (const fill of fills) {
-        const mask = buildFashionRegionMask(
-          strokes,
-          output.width,
-          output.height,
-          fill.seed,
-        );
-        if (mask) exportMasks.set(fill.id, mask);
-      }
-      if (strokes.length > 0 || exportMasks.size > 0) {
+      if (strokes.length > 0 || fashionMasksRef.current.size > 0) {
         renderFashionLayer(
           context,
           output.width,
           output.height,
-          exportMasks,
+          fashionMasksRef.current,
           fills,
           strokes,
           0.48,
         );
-      }
-      for (const mask of exportMasks.values()) {
-        mask.canvas.width = 0;
-        mask.canvas.height = 0;
       }
 
       for (const layer of layers) {
@@ -1723,20 +1709,13 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
 
       try {
         for (const fill of fills) {
-          const mask = buildFashionRegionMask(
-            strokes,
-            output.width,
-            output.height,
-            fill.seed,
-          );
+          const mask = fashionMasksRef.current.get(fill.id);
           if (!mask) continue;
           const layer = document.createElement("canvas");
           layer.width = output.width;
           layer.height = output.height;
           const context = layer.getContext("2d");
           if (!context) {
-            mask.canvas.width = 0;
-            mask.canvas.height = 0;
             continue;
           }
           context.fillStyle = "#ffffff";
@@ -1754,8 +1733,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
               blob: await canvasToBlob(layer, "image/png"),
             });
           } finally {
-            mask.canvas.width = 0;
-            mask.canvas.height = 0;
             layer.width = 0;
             layer.height = 0;
           }
@@ -1822,20 +1799,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       refreshFashionState();
     };
 
-    const updateFashionRegionStyle = (
-      regionId: string,
-      patch: Partial<Omit<FashionSettings, "size">>,
-    ) => {
-      const operation = fashionOperationsRef.current.find(
-        (candidate) =>
-          candidate.type === "fill" && candidate.fill.id === regionId,
-      );
-      if (!operation || operation.type !== "fill") return;
-      Object.assign(operation.fill, patch);
-      renderVisibleGuide();
-      refreshFashionState();
-    };
-
     useImperativeHandle(forwardedRef, () => ({
       createContextualGuideBlob,
       createMakeupGuideLayers,
@@ -1844,7 +1807,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       clearFashionGuide,
       undoGuide,
       selectFashionRegion,
-      updateFashionRegionStyle,
       hasGuide: () => hasMarksRef.current || hasFashionMarksRef.current,
     }));
 
@@ -1897,16 +1859,38 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       );
     };
 
+    const fashionFillAt = (point: FashionPoint) =>
+      [...fashionFills()].reverse().find((fill) => {
+        const mask = fashionMasksRef.current.get(fill.id);
+        return mask ? fashionRegionContains(mask, point) : false;
+      });
+
+    const removeFashionFillAt = (point: FashionPoint) => {
+      const existing = fashionFillAt(point);
+      if (!existing) return false;
+      fashionOperationsRef.current = fashionOperationsRef.current.filter(
+        (operation) =>
+          operation.type !== "fill" || operation.fill.id !== existing.id,
+      );
+      const mask = fashionMasksRef.current.get(existing.id);
+      if (mask) {
+        mask.canvas.width = 0;
+        mask.canvas.height = 0;
+      }
+      fashionMasksRef.current.delete(existing.id);
+      if (selectedFashionRegionRef.current === existing.id) {
+        selectedFashionRegionRef.current = null;
+      }
+      renderVisibleGuide();
+      refreshFashionState();
+      if ("vibrate" in navigator) navigator.vibrate(18);
+      return true;
+    };
+
     const fillFashionAt = (point: FashionPoint) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const fills = fashionFills();
-      const existing = [...fills]
-        .reverse()
-        .find((fill) => {
-          const mask = fashionMasksRef.current.get(fill.id);
-          return mask ? fashionRegionContains(mask, point) : false;
-        });
+      const existing = fashionFillAt(point);
 
       if (existing) {
         existing.category = fashion.category;
@@ -1989,7 +1973,9 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
         refreshFashionState();
         updateBrushCursor(event);
 
-        if (tool !== "eraser") {
+        const holdRemovesFill =
+          tool === "eraser" && Boolean(fashionFillAt(point));
+        if (tool !== "eraser" || holdRemovesFill) {
           longPressStartRef.current = {
             point,
             clientX: event.clientX,
@@ -2008,7 +1994,11 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
             drawingRef.current = false;
             longPressTriggeredRef.current = true;
             longPressStartRef.current = null;
-            fillFashionAt(start.point);
+            if (holdRemovesFill) {
+              removeFashionFillAt(start.point);
+            } else {
+              fillFashionAt(start.point);
+            }
           }, FASHION_FILL_HOLD_MS);
         }
         event.preventDefault();
@@ -2084,9 +2074,6 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       }
 
       if (interactionMode === "fashion") {
-        if (!longPressTriggeredRef.current) {
-          rebuildFashionMasks(event.currentTarget.width, event.currentTarget.height);
-        }
         longPressTriggeredRef.current = false;
         renderVisibleGuide();
         refreshFashionState();

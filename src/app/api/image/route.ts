@@ -390,7 +390,7 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
             const centerY = layer.bounds.y + layer.bounds.height / 2;
             const shapeInstruction =
               layer.kind === "outline"
-                ? "The user supplied an outline rather than a fill; infer and close the intended interior conservatively from the drawn contour."
+                ? "The user supplied an outline rather than a fill. Treat every major branch, lobe, and extension of that contour as mandatory product coverage, bridge only tiny accidental gaps, and close the intended interior without deleting or shortening any substantial section. A contour extending from the torso onto or around an arm defines a sleeve with that mapped length and volume—never trim a sleeved outline back into a vest or sleeveless garment."
                 : "The colored region is the intended outer silhouette and coverage.";
             const categoryInstruction =
               layer.category === "auto"
@@ -438,6 +438,8 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
     : "Preserve the source image's existing makeup exactly. Do not invent new makeup or face paint.";
   const fashionInterpretation = layout.fashionLayers.length
     ? `- Read all aligned fashion maps together before rendering. Decide whether each region is an independent product, a component of another mapped product, or a surface treatment contained within it; separate maps do not automatically mean separate objects.
+- Perform a contour-accounting pass before rendering: every substantial mapped branch, lobe, extension, and disconnected-but-related segment must become corresponding product geometry. Do not silently omit a section because it is rough, crosses anatomy, or differs from existing clothing.
+- Preserve topology, not merely the general garment category. A torso outline with contours extending along or around the arms is a sleeved jacket, coat, shirt, or dress as supported by the label—not a vest. Likewise preserve mapped legs, straps, handles, panels, and other defining extensions. Fast mode does not relax this requirement.
 - Use your general visual, fashion, and physical-world knowledge to make the best supported semantic guess at what the user is trying to create. Weigh all evidence together: contour and topology, material and pattern, color, scale, placement in the image, anatomical anchor, pose, interaction with the body or existing clothing, and relationships among maps. A rough, incomplete, unusual, or cropped drawing still requires a specific plausible interpretation; do not default to a generic patch or garment merely because it is ambiguous.
 - The following are illustrative cues, not a closed list: a fitted region around a hand, wrist, or distal forearm—especially in leather—suggests a glove rather than a sleeve; a curved narrow design at the neck or clavicle suggests a necklace or choker rather than a collar; a handled or strapped volume beside the torso or hip suggests a purse or bag rather than a clothing patch. Apply the same contextual reasoning to any other item.
 - A source-frame crop is not a designed edge. Continue an intended glove, shoe, bag, or other wearable naturally to the frame boundary without zooming, recropping, inventing exposed anatomy, or changing it into a different item.
@@ -496,6 +498,7 @@ MANDATORY 2D-TO-3D RECONSTRUCTION
 
 NON-NEGOTIABLE FIDELITY RULES
 - Preserve the exact same recognizable person from input image ${layout.sourceIndex}. The current accepted photograph outranks every guide and artifact reference. Do not change facial geometry, ethnicity, age, expression, eye shape/color, brows, nose, lips, jaw, ears, skin tone, body, or pose.
+- Before output, compare every hand-drawn fashion map against the result and confirm that each major mapped component is present at its intended coverage. No missing sleeves, shortened extensions, or conversion of mapped garment area into exposed anatomy.
 - Keep eyes, eyebrows, nose, and mouth clearly recognizable and unobstructed by newly added hair or accessories.
 - Preserve pores, stubble, freckles, fine hair, wrinkles, under-eye detail, and natural skin variation. No waxy skin, plastic texture, beauty-filter smoothing, face replacement, or identity drift.
 - Keep the current canvas framing, subject scale, perspective, background, and lighting. Do not zoom in or crop away visible parts of the subject to fit an addition.
