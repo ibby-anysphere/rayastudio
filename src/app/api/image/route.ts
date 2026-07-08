@@ -332,7 +332,14 @@ function physicalIntegrationRule(
     normalizedDescription.includes("tiara") ||
     normalizedDescription.includes("crown")
   ) {
-    return "Rebuild it as a genuinely three-dimensional crown: curve its band around the skull as an ellipse in perspective, let the far side pass naturally behind the head or hair, give metal and stones real thickness, contact points, cast shadows, reflections, and camera-matched depth of field.";
+    return "Fit it to the person's actual head rather than copying the flat placement proxy: seat the band at the natural hairline, curve it around the skull as an ellipse in perspective, and let the far side pass behind the head or hair. Give the metal and stones real thickness, contact points, cast shadows, reflections, and camera-matched depth of field.";
+  }
+  if (
+    /\b(keychains?|key rings?|keyrings?|lobster clasps?)\b/.test(
+      normalizedDescription,
+    )
+  ) {
+    return "Clip the keychain's clasp securely onto the nearest plausible jeans belt loop, waistband loop, or pocket edge. Keep it small, preserve every ring, chain link, charm, and hardware detail, and let the chain and charm hang downward under gravity with realistic metal thickness, denim contact, front/behind occlusion, movement, and contact shadows. Never turn it into a necklace or let it float.";
   }
   if (
     normalizedDescription.includes("necklace") ||
@@ -388,90 +395,39 @@ function editPrompt(intent: GenerationIntent, layout: InputLayout) {
             const pattern = fashionPattern(layer.pattern);
             const centerX = layer.bounds.x + layer.bounds.width / 2;
             const centerY = layer.bounds.y + layer.bounds.height / 2;
-            const shapeInstruction =
-              layer.kind === "outline"
-                ? "The user supplied an outline rather than a fill. Treat every major branch, lobe, and extension of that contour as mandatory product coverage, bridge only tiny accidental gaps, and close the intended interior without deleting or shortening any substantial section. A contour extending from the torso onto or around an arm defines a sleeve with that mapped length and volume—never trim a sleeved outline back into a vest or sleeveless garment."
-                : "The colored region is the intended outer silhouette and coverage.";
-            const categoryInstruction =
+            const categoryHint =
               layer.category === "auto"
-                ? "Use your visual and fashion knowledge to make the best supported guess at the specific intended item and whether this is the complete wearable, part of another mapped product, or an integrated surface detail. Consider its silhouette, topology, material, pattern, scale, image location, anatomical anchor, and relationship to the source and other maps; do not force it into a preset category."
-                : `Use the explicit ${category.label.toLowerCase()} label while deciding whether this region defines the whole item, one component, or a surface detail of that item.`;
-            return `${index + 1}. Input image ${layer.index}: one hand-drawn fashion design region using ${material.label.toLowerCase()} (${material.prompt}), colored ${layer.color}, with ${pattern.prompt}. ${categoryInstruction} ${shapeInstruction} It occupies the ${describePosition(centerX, centerY)} and roughly ${Math.round(layer.bounds.width * 100)}% × ${Math.round(layer.bounds.height * 100)}% of the photograph.`;
+                ? ""
+                : ` The user labeled it a ${category.label.toLowerCase()}.`;
+            return `${index + 1}. Input image ${layer.index}: a coverage stencil aligned pixel-for-pixel with the photograph, in the ${describePosition(centerX, centerY)}. Its ${layer.color} pixels mark exactly where a new ${material.label.toLowerCase()} garment (${material.prompt}) with ${pattern.prompt} sits on the body; white pixels are left untouched. Paint the new material within every colored pixel and only those pixels. The colored shape is the garment's exact silhouette—its sleeves or lack of them, length, openings, straps, and extensions all follow the drawing. Reproduce that outline faithfully, smoothing only tiny hand jitter; do not add, remove, lengthen, shorten, or reshape coverage into a different garment.${categoryHint}`;
           })
           .join("\n");
 
-  const sourceHierarchy = `- Input image ${layout.sourceIndex} is the clean, current accepted photograph immediately before this edit. It already contains every previously accepted change and is the sole source of truth for identity, face, skin, body, pose, crop, camera, lighting, environment, and existing styling.`;
-  const contextualGuideHierarchy = layout.contextualGuideIndex
-    ? `- Input image ${layout.contextualGuideIndex} is a contextual after-guide made from the current photograph with translucent makeup, hand-drawn fashion, and artifact proxies. Use it only to understand anatomical context, combined placement, approximate silhouette, scale, rotation, stretched proportions, and front/behind relationships. The separate labeled instruction maps below are authoritative for meaning. Never copy guide strokes, transparency, pasted edges, lighting, or accidental facial overlap.`
-    : "- There is no contextual after-guide for this edit.";
-  const makeupGuideHierarchy = layout.makeupLayers.length
+  const contextualGuide = layout.contextualGuideIndex
+    ? `- Input image ${layout.contextualGuideIndex} is a translucent contextual guide. Use it only for approximate placement, scale, pose relationships, and the user's combined intent. Do not copy its pasted edges, transparency, flat lighting, or accidental overlap.`
+    : "- No contextual guide was supplied.";
+  const makeupDesigns = layout.makeupLayers.length
     ? layout.makeupLayers
         .map(({ product, colors, index }) => {
           const rule = MAKEUP_LAYER_RULES[product];
-          return `- Input image ${index} is the isolated ${rule.label} instruction layer, aligned edge-for-edge with input image ${layout.sourceIndex}. White means no ${rule.label.toLowerCase()} edit. Its colored marks use ${colors.join(", ")} and communicate only requested location, shape, hue, and intensity for this named product.`;
+          return `- Input image ${index}: source-aligned ${rule.label} map using ${colors.join(", ")}. White means no edit in this map. ${rule.instruction}`;
         })
         .join("\n")
-    : "- There is no makeup instruction map for this edit.";
-  const fashionGuideHierarchy = layout.fashionLayers.length
-    ? layout.fashionLayers
-        .map((layer) => {
-          const category = fashionCategory(layer.category);
-          const material = fashionMaterial(layer.material);
-          const pattern = fashionPattern(layer.pattern);
-          return `- Input image ${layer.index} is an isolated FASHION SKETCH map for one ${category.label.toUpperCase()} design region, aligned edge-for-edge with input image ${layout.sourceIndex}. White means no change. The ${layer.color} ${layer.kind === "outline" ? "linework" : "filled/patterned region"} communicates the user's requested shape and coverage. Jointly with the other maps, it may define a complete item, one component, or ornament integrated into a larger mapped item. Rebuild it as real ${material.label.toLowerCase()} with ${pattern.label.toLowerCase()} styling; never paste the map's pixels.`;
-        })
-        .join("\n")
-    : "- There is no hand-drawn fashion instruction map for this edit.";
-  const localEdit = Boolean(
-    layout.contextualGuideIndex ||
-      layout.makeupLayers.length ||
+    : "- No makeup change was requested.";
+  const hasRequestedEdits = Boolean(
+    layout.makeupLayers.length ||
       layout.fashionLayers.length ||
       intent.placedAssets.length,
   );
-  const beautyInterpretation = layout.makeupLayers.length
-    ? layout.makeupLayers
-        .map(({ product, index }) => {
-          const rule = MAKEUP_LAYER_RULES[product];
-          return `- ${rule.label} — input image ${index}: ${rule.instruction} Transfer the guide's hue, coverage, intensity, and aligned placement onto input image ${layout.sourceIndex}, then remove every trace of the white map and digital brush texture.`;
-        })
-        .join("\n")
-    : "Preserve the source image's existing makeup exactly. Do not invent new makeup or face paint.";
-  const fashionInterpretation = layout.fashionLayers.length
-    ? `- Read all aligned fashion maps together before rendering. Decide whether each region is an independent product, a component of another mapped product, or a surface treatment contained within it; separate maps do not automatically mean separate objects.
-- Perform a contour-accounting pass before rendering: every substantial mapped branch, lobe, extension, and disconnected-but-related segment must become corresponding product geometry. Do not silently omit a section because it is rough, crosses anatomy, or differs from existing clothing.
-- Preserve topology, not merely the general garment category. A torso outline with contours extending along or around the arms is a sleeved jacket, coat, shirt, or dress as supported by the label—not a vest. Likewise preserve mapped legs, straps, handles, panels, and other defining extensions. Fast mode does not relax this requirement.
-- Use your general visual, fashion, and physical-world knowledge to make the best supported semantic guess at what the user is trying to create. Weigh all evidence together: contour and topology, material and pattern, color, scale, placement in the image, anatomical anchor, pose, interaction with the body or existing clothing, and relationships among maps. A rough, incomplete, unusual, or cropped drawing still requires a specific plausible interpretation; do not default to a generic patch or garment merely because it is ambiguous.
-- The following are illustrative cues, not a closed list: a fitted region around a hand, wrist, or distal forearm—especially in leather—suggests a glove rather than a sleeve; a curved narrow design at the neck or clavicle suggests a necklace or choker rather than a collar; a handled or strapped volume beside the torso or hip suggests a purse or bag rather than a clothing patch. Apply the same contextual reasoning to any other item.
-- A source-frame crop is not a designed edge. Continue an intended glove, shoe, bag, or other wearable naturally to the frame boundary without zooming, recropping, inventing exposed anatomy, or changing it into a different item.
-- Treat the user's rough contour as design intent, not finished artwork. Smooth hand wobble into a deliberate couture cut, bridge tiny accidental gaps, preserve intentional corners and unusual proportions, and remove every trace of digital linework.
-- For a product or component, the authored contour defines its silhouette. For a nested surface motif, the contour defines the ornament's boundary. If either overlaps existing clothing, locally replace, recut, or decorate that clothing only where needed; do not simply tint it.
-- Treat a smaller shape drawn inside or across a garment as physically integrated embroidery, topstitching, appliqué, inset fabric, trim, or print unless its explicit type and geometry clearly identify a separate object. It must inherit the host cloth's folds, perspective, tension, seams, wear, lighting, and occlusion—never float as a sticker or flat painted blob.
-- On denim, render such motifs with native denim construction: visible thread and stitch relief, denim-on-denim appliqué or patch edges, woven/washed texture, and deformation across folds as appropriate to the drawing. Preserve the authored motif and color instead of replacing it with a generic all-over print.
-- Reconstruct each named material physically: correct thickness, weave or pile, seams, hems, folds, tension, gravity, highlights, and contact shadows. Make the named print part of the textile so it follows folds, perspective, and occlusion.
-- Keep each map's authored color, fabric, pattern, and spatial boundary distinct even when multiple maps combine into one product.
-- Fit tops, dresses, skirts, pants, and outerwear around the subject's real anatomy and pose. Build gloves, necklaces, bags, shoes, and other accessories as coherent three-dimensional wearables attached, wrapped, or held at the nearest plausible anatomical anchor.
-- A color value is the intended textile color, not a translucent overlay. Match it faithfully while relighting it under the photograph's real illumination.`
-    : "Preserve all existing clothing and accessories unless a separate wardrobe piece explicitly changes them.";
-  const editScope = localEdit
-    ? `SURGICAL EDIT SCOPE
-- This is a localized edit, not a request to regenerate or reinterpret the photograph.
-- Change only the pixels needed to integrate the requested makeup, hand-drawn fashion, or pieces.
-- Everywhere else, reproduce input image ${layout.sourceIndex} exactly: same background detail, face, skin texture, existing hair and clothing, lighting, exposure, color, grain, sharpness, and composition. Do not repaint, relight, smooth, stylize, or replace untouched areas.
-- If an addition overlaps the face in the contextual after-guide, recover the unobstructed face from input image ${layout.sourceIndex} and fit the addition naturally around it.`
-    : `NO-OP EDIT SCOPE
-- No makeup or wardrobe changes were supplied. Reproduce the source photograph exactly.`;
 
   return `
-You are RIYA, a precision photorealistic image editor and physically based 3D compositor. Make the smallest possible edit to the source photograph. Do not beautify, art-direct, color-grade, relight, or reinterpret it. The finished image must look like the same untouched photograph with only the requested real-world additions present.
+You are RIYA, a photorealistic image editor. Turn the user's visual intent into a result that looks physically real in the source photograph.
 
-INPUT HIERARCHY
-${sourceHierarchy}
-${contextualGuideHierarchy}
-${makeupGuideHierarchy}
-${fashionGuideHierarchy}
-- Every remaining input image is an isolated artifact design reference. It defines what a requested piece should look like, not how its 2D pixels should be pasted.
-
-${editScope}
+GOAL
+${hasRequestedEdits ? "Apply every requested styling change below." : "No styling change was requested; reproduce the source photograph."}
+- Input image ${layout.sourceIndex} is the current accepted photograph and the source of truth for the person's identity, face, skin, body, pose, camera, crop, environment, and all previously accepted styling.
+${contextualGuide}
+- Isolated maps and placement proxies communicate intent; they are not pixels to paste. Isolated design references define appearance and construction, not flat pose or lighting.
 
 REQUESTED PIECES
 ${pieces}
@@ -479,36 +435,70 @@ ${pieces}
 HAND-DRAWN FASHION DESIGNS
 ${fashionDesigns}
 
-BEAUTY INTERPRETATION
-${beautyInterpretation}
-- Product labels outrank color assumptions: a plum mark in an EYELINER layer is eyeliner, while the same hue in an EYESHADOW layer is eyeshadow.
-- Treat each white map as a semantic mask, not a visual layer to paste. Apply only the named cosmetic, respect anatomical boundaries, preserve real skin and hair detail, and leave no white background, halo, guide edge, or digital stroke texture.
+MAKEUP DESIGNS
+${makeupDesigns}
 
-FASHION SKETCH INTERPRETATION
-${fashionInterpretation}
+INTENT AND FIT
+- One rule governs every fashion map: colored pixels become the new garment; white pixels stay exactly as the current photograph. The existing shirt, skin, and background under white pixels are untouched, so any gap or opening drawn inside a garment keeps the original clothing showing through there.
+- The colored coverage is the garment's exact silhouette and is the whole intent. Whatever the user drew—short or long sleeves, a sleeveless vest, a hood, gloves, straps, a cropped or floor-length hem—render precisely that. Do not add, remove, lengthen, shorten, or reshape coverage into a more familiar garment; a sleeveless drawing stays sleeveless and a sleeved drawing keeps its sleeves.
+- Smooth only small hand-drawn wobble into clean seams while keeping the shape, length, and proportions the user drew.
+- Connected maps, or maps with matching styling, are one garment.
+- Render each named material and print as real fabric with believable thickness, folds, seams, and the photograph's own lighting and shadows—never a flat sticker or a simple recolor.
+- Placement proxies and coordinates are approximate anchors; fit the garment to the person's real anatomy and pose.
+- Apply makeup only as the named cosmetic in its aligned map, refining rough marks to real anatomy while preserving pores, texture, lashes, and brows. Leave no white map, digital stroke, halo, or pasted edge.
 
-MANDATORY 2D-TO-3D RECONSTRUCTION
-- Recreate every requested piece from scratch as a physically present three-dimensional object or hairstyle in the scene. Never paste, decal, sticker, or simply blend the reference pixels onto the portrait.
-- Placement coordinates and translucent proxies are approximate composition hints. Anatomically correct attachment and keeping the face recognizable always take priority; move a piece to the nearest plausible attachment point if the raw proxy position is physically impossible.
-- Infer unseen geometry, thickness, curvature, attachment, gravity, collision, and how the object wraps around the head or body.
-- Solve scene depth explicitly: which portions pass behind hair, head, ears, neck, hands, and clothing, and which portions sit in front.
-- Re-light every addition from the portrait's actual key light, fill light, color temperature, exposure, and environment. Add physically correct contact shadows, reflections, refraction, translucency, strand/fabric response, lens blur, grain, and edge softness.
-- Match the original camera perspective, focal length, sensor character, depth of field, resolution, and photographic noise.
-- If a translucent placement proxy overlaps an eye, eyebrow, nose, mouth, or other facial feature, treat that as an accidental 2D overlap. Recover the unobstructed feature from input image ${layout.sourceIndex} and fit the piece naturally around or behind it.
-
-NON-NEGOTIABLE FIDELITY RULES
-- Preserve the exact same recognizable person from input image ${layout.sourceIndex}. The current accepted photograph outranks every guide and artifact reference. Do not change facial geometry, ethnicity, age, expression, eye shape/color, brows, nose, lips, jaw, ears, skin tone, body, or pose.
-- Before output, compare every hand-drawn fashion map against the result and confirm that each major mapped component is present at its intended coverage. No missing sleeves, shortened extensions, or conversion of mapped garment area into exposed anatomy.
-- Keep eyes, eyebrows, nose, and mouth clearly recognizable and unobstructed by newly added hair or accessories.
-- Preserve pores, stubble, freckles, fine hair, wrinkles, under-eye detail, and natural skin variation. No waxy skin, plastic texture, beauty-filter smoothing, face replacement, or identity drift.
-- Keep the current canvas framing, subject scale, perspective, background, and lighting. Do not zoom in or crop away visible parts of the subject to fit an addition.
-- Apply only requested styling. Do not add text, logos, watermarks, extra jewelry, extra limbs, duplicate objects, or unrelated props.
-- Final acceptance test: the face must match input image ${layout.sourceIndex}, every addition must pass as a real 3D object photographed in-camera, and no pasted 2D edge or guide artifact may remain.
+REALISM AND PRESERVATION
+- Reconstruct additions as physically present three-dimensional objects. Infer hidden geometry, thickness, attachment, gravity, collision, and which parts pass behind or in front of hair, head, ears, neck, hands, body, and clothing.
+- Match the photograph's actual illumination, color temperature, perspective, focal character, depth of field, grain, sharpness, reflections, material response, contact shadows, and edge softness.
+- Preserve the exact recognizable person, facial geometry, expression, skin tone and texture, body, pose, framing, background, and lighting. Do not beautify, smooth, relight, restyle, zoom, or crop the untouched photograph.
+- Keep eyes, eyebrows, nose, and mouth recognizable. If an approximate proxy crosses the face, recover the face from input image ${layout.sourceIndex} and fit the item naturally around or behind it.
+- Add only requested styling. No unrelated objects, text, logos, watermarks, duplicate pieces, or extra anatomy.
+- Before output, verify that every requested region and substantial extension is present, every item fits its anatomical anchor, and every addition looks photographed in-camera rather than pasted on.
 `.trim();
 }
 
 function imageDataUrl(base64: string, mimeType: string) {
   return `data:${mimeType};base64,${base64}`;
+}
+
+// Persists the exact images and prompt handed to Gemini so the authoritative
+// coverage map can be inspected against on-canvas intent. Opt-in via the
+// RIYA_DEBUG_MASKS env flag; output lands in the gitignored .riya-debug folder.
+async function dumpEditDebug(
+  requestId: string,
+  files: File[],
+  prompt: string,
+  intent: GenerationIntent,
+) {
+  try {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const dir = join(process.cwd(), ".riya-debug", requestId);
+    await mkdir(dir, { recursive: true });
+    await Promise.all(
+      files.map(async (file, index) => {
+        const extension = file.type.split("/")[1] || "png";
+        const label = index === 0 ? "1-source" : `${index + 1}-${file.name}`;
+        const safe = label.replace(/[^a-z0-9._-]/gi, "-");
+        await writeFile(
+          join(dir, `${safe}.${extension}`),
+          Buffer.from(await file.arrayBuffer()),
+        );
+      }),
+    );
+    await writeFile(join(dir, "prompt.txt"), prompt, "utf8");
+    await writeFile(
+      join(dir, "intent.json"),
+      JSON.stringify(intent, null, 2),
+      "utf8",
+    );
+    console.info(`[RIYA ${requestId}] debug dump written to ${dir}`);
+  } catch (error) {
+    console.warn(
+      `[RIYA ${requestId}] debug dump failed`,
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 function requestedRenderMode(form: FormData): GeminiRenderMode {
@@ -557,7 +547,7 @@ const ASSET_CATEGORY_PATTERNS: Array<{
   {
     category: "garment",
     pattern:
-      /\b(garment|clothing|outfit|dress|gown|skirt|shirts?|blouse|tops?|tee|t-shirt|pants|trousers|jeans|shorts|suit|jacket|coat|blazer|sweater|hoodie|cardigan|corset|bodysuit|jumpsuit|romper|vest|robe|cape|kimono|lingerie|swimsuit|bikini|uniform|sari|saree|lehenga)\b/i,
+      /\b(garment|clothing|outfit|dress|gown|skirt|shirts?|blouse|tops?|tee|t-shirt|turtlenecks?|pants|trousers|jeans|shorts|suit|jacket|coat|blazer|sweater|hoodie|cardigan|corset|bodysuit|jumpsuit|romper|vest|robe|cape|kimono|lingerie|swimsuit|bikini|uniform|sari|saree|lehenga)\b/i,
   },
 ];
 
@@ -1229,15 +1219,21 @@ export async function POST(request: Request) {
     }
     files.push(...(referenceEntries as File[]));
 
+    const editPromptText = editPrompt(intent, {
+      sourceIndex,
+      contextualGuideIndex,
+      makeupLayers,
+      fashionLayers,
+    });
+
+    if (process.env.RIYA_DEBUG_MASKS || process.env.NODE_ENV !== "production") {
+      await dumpEditDebug(requestId, files, editPromptText, intent);
+    }
+
     const result = await generateGeminiImage({
       mode: renderMode,
       images: files,
-      prompt: editPrompt(intent, {
-        sourceIndex,
-        contextualGuideIndex,
-        makeupLayers,
-        fashionLayers,
-      }),
+      prompt: editPromptText,
       aspectRatio,
       outputMimeType: "image/jpeg",
     });

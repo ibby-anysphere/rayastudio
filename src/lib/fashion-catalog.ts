@@ -30,7 +30,7 @@ export const fashionCategories: FashionCategoryOption[] = [
     label: "Fashion piece",
     hint: "infer the intended garment or accessory from its shape and placement",
   },
-  { id: "top", label: "Top", hint: "shirts, tees, corsets" },
+  { id: "top", label: "Top", hint: "shirts, tees, turtlenecks, corsets" },
   { id: "dress", label: "Dress", hint: "mini to ball gown" },
   { id: "skirt", label: "Skirt", hint: "any length or shape" },
   { id: "pants", label: "Pants", hint: "shorts count too" },

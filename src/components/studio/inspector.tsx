@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -49,6 +50,16 @@ import type {
   StudioTab,
 } from "@/lib/studio-types";
 import styles from "./studio.module.css";
+
+const FEATURE_DISCOVERY_STORAGE_KEY = "raya-feature-discovery-v1";
+const featureDiscoveryTargets = [
+  "create-tab",
+  "closet-tab",
+  "print",
+  "color",
+  "describe",
+] as const;
+type FeatureDiscoveryTarget = (typeof featureDiscoveryTargets)[number];
 
 interface InspectorProps {
   tab: StudioTab;
@@ -241,8 +252,12 @@ export function Inspector({
     | { kind: "fashion"; asset: StudioAsset }
     | null
   >(null);
+  const inspectorScrollRef = useRef<HTMLDivElement>(null);
   const artifactUploadRef = useRef<HTMLInputElement>(null);
   const autoPreviewedFashionJobsRef = useRef(new Set<string>());
+  const [featureDiscovery, setFeatureDiscovery] = useState<
+    Set<FeatureDiscoveryTarget>
+  >(() => new Set());
   const [productMemory, setProductMemory] = useState(
     () =>
       Object.fromEntries(
@@ -252,6 +267,84 @@ export function Inspector({
         ]),
       ) as Record<MakeupProductId, Pick<BrushSettings, "color" | "size">>,
   );
+
+  const markFeatureDiscovered = useCallback(
+    (target: FeatureDiscoveryTarget) => {
+      setFeatureDiscovery((current) => {
+        if (!current.has(target)) return current;
+        const next = new Set(current);
+        next.delete(target);
+        try {
+          const seen = featureDiscoveryTargets.filter(
+            (candidate) => !next.has(candidate),
+          );
+          window.localStorage.setItem(
+            FEATURE_DISCOVERY_STORAGE_KEY,
+            JSON.stringify({ seen }),
+          );
+        } catch {
+          // Discovery still settles for this session when storage is unavailable.
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let seen: string[] = [];
+    try {
+      const stored = JSON.parse(
+        window.localStorage.getItem(FEATURE_DISCOVERY_STORAGE_KEY) ||
+          '{"seen":[]}',
+      ) as { seen?: unknown };
+      if (Array.isArray(stored.seen)) {
+        seen = stored.seen.filter(
+          (value): value is string => typeof value === "string",
+        );
+      }
+    } catch {
+      // A malformed value behaves like a first session.
+    }
+    const frame = window.requestAnimationFrame(() => {
+      setFeatureDiscovery(
+        new Set(
+          featureDiscoveryTargets.filter((target) => !seen.includes(target)),
+        ),
+      );
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      if (tab === "create") markFeatureDiscovered("create-tab");
+      if (tab === "wardrobe") markFeatureDiscovered("closet-tab");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [featureDiscovery, markFeatureDiscovered, tab]);
+
+  useEffect(() => {
+    if (tab !== "create") return;
+    const root = inspectorScrollRef.current;
+    if (!root) return;
+    const elements = Array.from(
+      root.querySelectorAll<HTMLElement>("[data-feature-discovery]"),
+    );
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const target = (entry.target as HTMLElement).dataset
+            .featureDiscovery as FeatureDiscoveryTarget | undefined;
+          if (target) markFeatureDiscovered(target);
+        }
+      },
+      { root, threshold: 0.55 },
+    );
+    for (const element of elements) observer.observe(element);
+    return () => observer.disconnect();
+  }, [featureDiscovery, markFeatureDiscovered, tab]);
 
   useEffect(() => {
     if (!expandedCreation) return;
@@ -460,29 +553,54 @@ export function Inspector({
   };
 
   return (
-    <aside
-      className={`${styles.inspector} ${disabled ? styles.inspectorDisabled : ""}`}
-      inert={disabled ? true : undefined}
-    >
+    <aside className={styles.inspector} aria-busy={disabled}>
       <div className={styles.inspectorTabs} role="tablist" aria-label="Styling controls">
         {tabItems.map((item) => {
           const Icon = item.icon;
+          const discoveryTarget: FeatureDiscoveryTarget | null =
+            item.id === "create"
+              ? "create-tab"
+              : item.id === "wardrobe"
+                ? "closet-tab"
+                : null;
+          const discovering = Boolean(
+            discoveryTarget && featureDiscovery.has(discoveryTarget),
+          );
           return (
             <button
               key={item.id}
-              className={tab === item.id ? styles.inspectorTabActive : styles.inspectorTab}
+              className={`${
+                tab === item.id
+                  ? styles.inspectorTabActive
+                  : styles.inspectorTab
+              }`}
               role="tab"
               aria-selected={tab === item.id}
-              onClick={() => onTabChange(item.id)}
+              onClick={() => {
+                if (discoveryTarget) markFeatureDiscovered(discoveryTarget);
+                onTabChange(item.id);
+              }}
             >
-              <Icon size={15} />
+              {discovering && discoveryTarget && (
+                <ChevronRight
+                  className={styles.featureDiscoveryInlineArrow}
+                  size={14}
+                  aria-hidden="true"
+                />
+              )}
+              <Icon
+                size={15}
+                className={
+                  discovering ? styles.featureDiscoveryIconPulse : ""
+                }
+              />
               <span>{item.label}</span>
             </button>
           );
         })}
       </div>
 
-      <div className={styles.inspectorScroll}>
+      <div ref={inspectorScrollRef} className={styles.inspectorScroll}>
         {tab === "makeup" && (
           <div className={`${styles.panelStack} ${styles.beautyPanel}`}>
             <div
@@ -902,9 +1020,21 @@ export function Inspector({
                   </div>
                 </section>
 
-                <section className={styles.fashionControlSection}>
+                <section
+                  className={styles.fashionControlSection}
+                  data-feature-discovery="print"
+                >
                   <div className={styles.fashionControlHead}>
-                    <span>Step 2: Print</span>
+                    <span>
+                      {featureDiscovery.has("print") && (
+                        <Sparkles
+                          className={styles.featureDiscoveryIconPulse}
+                          size={13}
+                          aria-hidden="true"
+                        />
+                      )}
+                      Step 2: Print
+                    </span>
                   </div>
                   <div className={styles.fashionPatternGrid} role="radiogroup">
                     {fashionPatterns.map((pattern) => (
@@ -944,9 +1074,21 @@ export function Inspector({
                   </div>
                 </section>
 
-                <section className={styles.fashionControlSection}>
+                <section
+                  className={styles.fashionControlSection}
+                  data-feature-discovery="color"
+                >
                   <div className={styles.fashionControlHead}>
-                    <span>Step 3: Color</span>
+                    <span>
+                      {featureDiscovery.has("color") && (
+                        <Sparkles
+                          className={styles.featureDiscoveryIconPulse}
+                          size={13}
+                          aria-hidden="true"
+                        />
+                      )}
+                      Step 3: Color
+                    </span>
                   </div>
                   <div className={styles.fashionColorGrid} role="radiogroup">
                     {fashionColors.map((swatch) => (
@@ -1189,9 +1331,22 @@ export function Inspector({
 
         {tab === "create" && (
           <div className={styles.panelStack}>
-            <div className={styles.creationPathDivider} aria-hidden="true">
+            <div
+              className={styles.creationPathDivider}
+              aria-hidden="true"
+              data-feature-discovery="describe"
+            >
               <i />
-              <span>Or describe it</span>
+              <span>
+                {featureDiscovery.has("describe") && (
+                  <WandSparkles
+                    className={styles.featureDiscoveryIconPulse}
+                    size={14}
+                    aria-hidden="true"
+                  />
+                )}
+                Or describe it
+              </span>
               <i />
             </div>
 

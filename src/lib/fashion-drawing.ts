@@ -183,19 +183,18 @@ function renderBoundary(
   return { canvas, context };
 }
 
-function nearestOpenSeed(
-  boundary: Uint8ClampedArray,
+function nearestInteriorSeed(
+  exterior: Uint8Array,
   width: number,
   height: number,
   seedX: number,
   seedY: number,
 ) {
-  const isBoundary = (x: number, y: number) =>
-    boundary[(y * width + x) * 4 + 3] > 24;
-  if (!isBoundary(seedX, seedY)) return { x: seedX, y: seedY };
+  const index = seedY * width + seedX;
+  if (!exterior[index]) return index;
 
-  for (let radius = 2; radius <= 18; radius += 2) {
-    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+  for (let radius = 2; radius <= 22; radius += 2) {
+    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 10) {
       const x = Math.min(
         width - 1,
         Math.max(0, Math.round(seedX + Math.cos(angle) * radius)),
@@ -204,34 +203,74 @@ function nearestOpenSeed(
         height - 1,
         Math.max(0, Math.round(seedY + Math.sin(angle) * radius)),
       );
-      if (!isBoundary(x, y)) return { x, y };
+      if (!exterior[y * width + x]) return y * width + x;
     }
   }
   return null;
 }
 
-function floodRegion(
+// Fills the whole silhouette the outline encloses, not just the one pocket
+// under the tap. We first flood the exterior inward from the image borders
+// (stopping at drawn boundary pixels), then take the connected region of
+// "not exterior" that contains the seed. Because drawn boundary pixels are
+// themselves "not exterior", the flood crosses internal seams like an armhole
+// line into the sleeve, capturing every enclosed lobe (both sleeves + torso)
+// in one operation. Openings that reach the frame edge — an open front, a
+// cropped hem — stay exterior, so the underlying photo shows through there,
+// and genuinely separate drawings remain separate regions.
+function floodEnclosedRegion(
   boundary: Uint8ClampedArray,
   width: number,
   height: number,
   seed: FashionPoint,
 ) {
-  const seedX = Math.min(width - 1, Math.max(0, Math.round(seed.x * (width - 1))));
-  const seedY = Math.min(height - 1, Math.max(0, Math.round(seed.y * (height - 1))));
-  const openSeed = nearestOpenSeed(boundary, width, height, seedX, seedY);
-  if (!openSeed) return null;
-
   const total = width * height;
-  const filled = new Uint8Array(total);
+  const isBoundary = (index: number) => boundary[index * 4 + 3] > 24;
+
+  const exterior = new Uint8Array(total);
   const queue = new Int32Array(total);
   let readIndex = 0;
   let writeIndex = 0;
+
+  const enqueueExterior = (index: number) => {
+    if (index < 0 || index >= total || exterior[index] || isBoundary(index)) {
+      return;
+    }
+    exterior[index] = 1;
+    queue[writeIndex++] = index;
+  };
+
+  for (let x = 0; x < width; x += 1) {
+    enqueueExterior(x);
+    enqueueExterior((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y += 1) {
+    enqueueExterior(y * width);
+    enqueueExterior(y * width + width - 1);
+  }
+  while (readIndex < writeIndex) {
+    const pixelIndex = queue[readIndex++];
+    const x = pixelIndex % width;
+    const y = Math.floor(pixelIndex / width);
+    if (x > 0) enqueueExterior(pixelIndex - 1);
+    if (x < width - 1) enqueueExterior(pixelIndex + 1);
+    if (y > 0) enqueueExterior(pixelIndex - width);
+    if (y < height - 1) enqueueExterior(pixelIndex + width);
+  }
+
+  const seedX = Math.min(width - 1, Math.max(0, Math.round(seed.x * (width - 1))));
+  const seedY = Math.min(height - 1, Math.max(0, Math.round(seed.y * (height - 1))));
+  const start = nearestInteriorSeed(exterior, width, height, seedX, seedY);
+  if (start === null) return null;
+
+  const filled = new Uint8Array(total);
+  readIndex = 0;
+  writeIndex = 0;
   let minX = width;
   let minY = height;
   let maxX = -1;
   let maxY = -1;
 
-  const start = openSeed.y * width + openSeed.x;
   filled[start] = 1;
   queue[writeIndex++] = start;
 
@@ -249,7 +288,7 @@ function floodRegion(
         nextIndex < 0 ||
         nextIndex >= total ||
         filled[nextIndex] ||
-        boundary[nextIndex * 4 + 3] > 24
+        exterior[nextIndex]
       ) {
         return;
       }
@@ -263,7 +302,7 @@ function floodRegion(
     if (y < height - 1) visit(pixelIndex + width);
   }
 
-  if (writeIndex < 16 || writeIndex / total > 0.78) return null;
+  if (writeIndex < 16 || writeIndex / total > 0.9) return null;
   return {
     pixels: filled,
     count: writeIndex,
@@ -433,7 +472,7 @@ export function buildFashionRegionMask(
     const rendered = renderBoundary(paintStrokes, width, height, maxGap);
     if (!rendered) continue;
     const boundary = rendered.context.getImageData(0, 0, width, height).data;
-    const region = floodRegion(boundary, width, height, seed);
+    const region = floodEnclosedRegion(boundary, width, height, seed);
     rendered.canvas.width = 0;
     rendered.canvas.height = 0;
     if (!region) continue;

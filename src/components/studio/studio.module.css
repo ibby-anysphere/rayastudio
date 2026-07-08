@@ -1570,11 +1570,6 @@
   box-shadow: -8px 0 30px rgba(56, 40, 52, 0.035);
 }
 
-.inspectorDisabled {
-  cursor: progress;
-  opacity: 0.72;
-}
-
 .inspectorTabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -1612,6 +1607,25 @@
   border-radius: 2px 2px 0 0;
   background: linear-gradient(90deg, var(--brand-pink), var(--brand-coral));
   content: "";
+}
+
+.featureDiscoveryIconPulse {
+  color: #7d2b86;
+  filter: drop-shadow(0 3px 7px rgba(103, 34, 112, 0.3));
+  transform-origin: center;
+  animation: featureDiscoveryIconPulse 1.75s ease-in-out infinite;
+}
+
+.featureDiscoveryInlineArrow {
+  position: absolute;
+  z-index: 3;
+  top: 43%;
+  left: -8px;
+  color: #74277f;
+  filter: drop-shadow(0 2px 5px rgba(89, 26, 98, 0.22));
+  transform: translate(-50%, -50%);
+  animation: featureDiscoveryArrow 2.05s ease-in-out infinite;
+  pointer-events: none;
 }
 
 .inspectorScroll {
@@ -4184,13 +4198,6 @@
   animation: toastIn 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.generationInteractionLock {
-  position: fixed;
-  z-index: 95;
-  inset: 0;
-  cursor: progress;
-}
-
 .toastIcon {
   display: grid;
   width: 34px;
@@ -4300,6 +4307,39 @@
   100% {
     opacity: 0;
     transform: translate(-50%, -50%) scale(1.18);
+  }
+}
+
+@keyframes featureDiscoveryIconPulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    transform: scale(1);
+  }
+  42% {
+    opacity: 1;
+    transform: scale(1.42) rotate(-7deg);
+  }
+  62% {
+    opacity: 1;
+    transform: scale(1.24) rotate(6deg);
+  }
+}
+
+@keyframes featureDiscoveryArrow {
+  0%,
+  18%,
+  100% {
+    opacity: 0;
+    transform: translate(-72%, -50%) scale(0.78);
+  }
+  42% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1.16);
+  }
+  72% {
+    opacity: 1;
+    transform: translate(-24%, -50%) scale(1);
   }
 }
 

@@ -241,6 +241,7 @@ function defaultPlacement(asset: StudioAsset) {
     "silk-scarf": { x: 0.5, y: 0.64, scale: 55, rotation: -4 },
     "midnight-dress": { x: 0.5, y: 0.7, scale: 72, rotation: 0 },
     "petal-clutch": { x: 0.73, y: 0.72, scale: 31, rotation: -5 },
+    "star-keychain": { x: 0.64, y: 0.61, scale: 17, rotation: 8 },
   };
 
   if (placements[asset.id]) return placements[asset.id];
@@ -625,8 +626,20 @@ export function RiyaStudio() {
   };
 
   const canFillFashionRegion = () => {
-    const nextFashionLayerCount =
-      fashionState.regions.length === 0 ? 1 : fashionState.regions.length + 1;
+    // Fills that share the same fabric, print, color, and category are merged
+    // into ONE coverage map before generation, so the real limit is the number
+    // of DISTINCT materials, not the number of taps. A child can tap as many
+    // times as they like to complete one garment.
+    const styleKey = (region: {
+      category: string;
+      material: string;
+      pattern: string;
+      color: string;
+    }) =>
+      `${region.category}|${region.material}|${region.pattern}|${region.color.toLowerCase()}`;
+    const distinctStyles = new Set(fashionState.regions.map(styleKey));
+    distinctStyles.add(styleKey(fashion));
+    const nextFashionLayerCount = distinctStyles.size;
     if (
       nextFashionLayerCount > MAX_FASHION_LAYERS ||
       2 +
@@ -637,8 +650,8 @@ export function RiyaStudio() {
     ) {
       showToast(
         "info",
-        "Your magic layers are full",
-        `Use up to ${MAX_FASHION_LAYERS} filled shapes in one look, or remove another visual layer first.`,
+        "Too many different fabrics",
+        `Use up to ${MAX_FASHION_LAYERS} different fabric-and-print combos in one look, or remove another visual layer first.`,
       );
       return false;
     }
@@ -1522,7 +1535,7 @@ export function RiyaStudio() {
         <RayaLoadingScreen exiting={brandIntroState === "leaving"} />
       )}
       <main className={styles.studio}>
-        <header className={styles.topbar} inert={generating ? true : undefined}>
+        <header className={styles.topbar} aria-busy={generating}>
           <button
             className={styles.headerBrand}
             onClick={() => changeTab("makeup")}
@@ -1677,10 +1690,7 @@ export function RiyaStudio() {
             />
 
             {historyOpen && (
-              <div
-                className={styles.historyPanel}
-                inert={generating ? true : undefined}
-              >
+              <div className={styles.historyPanel}>
                 <div className={styles.historyHead}>
                   <div>
                     <span className={styles.eyebrow}>Revision history</span>
@@ -1817,15 +1827,6 @@ export function RiyaStudio() {
           />
         </div>
       </main>
-
-      {generating && (
-        <div
-          className={styles.generationInteractionLock}
-          aria-hidden="true"
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => event.preventDefault()}
-        />
-      )}
 
       {toast && (
         <div className={`${styles.toast} ${styles[`toast${toast.tone}`]}`} key={toast.id}>

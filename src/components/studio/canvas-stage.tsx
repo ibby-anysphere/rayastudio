@@ -1572,6 +1572,31 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       const fills = fashionFills();
       const strokes = fashionStrokes();
       if (strokes.length > 0 || fashionMasksRef.current.size > 0) {
+        // Paint each filled region as a near-opaque solid so the body beneath
+        // the coverage (the original shirt or a bare arm) is hidden. Otherwise
+        // the model sees the underlying arm through the translucent overlay and
+        // "preserves" it, turning a sleeved jacket back into a sleeveless vest.
+        // Openings the user left (an unzipped front) stay uncovered, so the
+        // original clothing still shows through there.
+        for (const fill of fills) {
+          const mask = fashionMasksRef.current.get(fill.id);
+          if (!mask) continue;
+          const solid = document.createElement("canvas");
+          solid.width = output.width;
+          solid.height = output.height;
+          const solidContext = solid.getContext("2d");
+          if (!solidContext) continue;
+          solidContext.drawImage(mask.canvas, 0, 0, solid.width, solid.height);
+          solidContext.globalCompositeOperation = "source-in";
+          solidContext.fillStyle = fashionColorHex(fill.color);
+          solidContext.fillRect(0, 0, solid.width, solid.height);
+          context.save();
+          context.globalAlpha = 0.9;
+          context.drawImage(solid, 0, 0);
+          context.restore();
+          solid.width = 0;
+          solid.height = 0;
+        }
         renderFashionLayer(
           context,
           output.width,
@@ -1579,7 +1604,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           fashionMasksRef.current,
           fills,
           strokes,
-          0.48,
+          0.5,
         );
       }
 
@@ -1595,8 +1620,14 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           context.save();
           // Keep the face and body visible beneath the placement proxy. The
           // isolated full-opacity piece is sent separately to the model.
-          context.globalAlpha =
-            layer.asset.category === "hair"
+          const isCrown =
+            layer.asset.id === "aurelia-tiara" ||
+            /\b(tiara|crown)\b/i.test(
+              `${layer.asset.name} ${layer.asset.prompt}`,
+            );
+          context.globalAlpha = isCrown
+            ? 0.26
+            : layer.asset.category === "hair"
               ? 0.46
               : layer.asset.category === "garment"
                 ? 0.52
@@ -1708,9 +1739,27 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       const guides: FashionGuideLayer[] = [];
 
       try {
+        // Group fills that share the same fabric, print, color, and category
+        // into ONE coverage map. A single garment drawn with an open front or
+        // open neck splits into several flood pockets; sending them as separate
+        // maps makes the model read matching panels as a layered vest. Merging
+        // them into one silhouette communicates one continuous garment.
+        const groups: {
+          key: string;
+          fill: FashionFill;
+          masks: FashionRegionMask[];
+        }[] = [];
         for (const fill of fills) {
           const mask = fashionMasksRef.current.get(fill.id);
           if (!mask) continue;
+          const key = `${fill.category}|${fill.material}|${fill.pattern}|${fill.color.toLowerCase()}`;
+          const existing = groups.find((group) => group.key === key);
+          if (existing) existing.masks.push(mask);
+          else groups.push({ key, fill, masks: [mask] });
+        }
+
+        for (const group of groups) {
+          const { fill, masks } = group;
           const layer = document.createElement("canvas");
           layer.width = output.width;
           layer.height = output.height;
@@ -1720,7 +1769,43 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
           }
           context.fillStyle = "#ffffff";
           context.fillRect(0, 0, layer.width, layer.height);
-          drawFashionRegion(context, mask, fill, 0.98);
+          const semanticMask = document.createElement("canvas");
+          semanticMask.width = layer.width;
+          semanticMask.height = layer.height;
+          const semanticContext = semanticMask.getContext("2d");
+          if (!semanticContext) {
+            semanticMask.width = 0;
+            semanticMask.height = 0;
+            layer.width = 0;
+            layer.height = 0;
+            continue;
+          }
+          // The isolated map communicates only authored coverage and topology.
+          // Material and print remain structured intent, while the contextual
+          // guide still shows the child-facing textured preview.
+          for (const mask of masks) {
+            semanticContext.drawImage(
+              mask.canvas,
+              0,
+              0,
+              semanticMask.width,
+              semanticMask.height,
+            );
+          }
+          semanticContext.globalCompositeOperation = "source-in";
+          semanticContext.fillStyle = fashionColorHex(fill.color);
+          semanticContext.fillRect(0, 0, semanticMask.width, semanticMask.height);
+          semanticContext.globalCompositeOperation = "source-over";
+          context.drawImage(semanticMask, 0, 0);
+
+          const minX = Math.min(...masks.map((mask) => mask.bounds.x));
+          const minY = Math.min(...masks.map((mask) => mask.bounds.y));
+          const maxX = Math.max(
+            ...masks.map((mask) => mask.bounds.x + mask.bounds.width),
+          );
+          const maxY = Math.max(
+            ...masks.map((mask) => mask.bounds.y + mask.bounds.height),
+          );
           try {
             guides.push({
               id: fill.id,
@@ -1729,10 +1814,17 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
               material: fill.material,
               pattern: fill.pattern,
               color: fill.color.toLowerCase(),
-              bounds: mask.bounds,
+              bounds: {
+                x: minX,
+                y: minY,
+                width: Math.max(0.01, maxX - minX),
+                height: Math.max(0.01, maxY - minY),
+              },
               blob: await canvasToBlob(layer, "image/png"),
             });
           } finally {
+            semanticMask.width = 0;
+            semanticMask.height = 0;
             layer.width = 0;
             layer.height = 0;
           }
@@ -1891,20 +1983,7 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       const canvas = canvasRef.current;
       if (!canvas) return;
       const existing = fashionFillAt(point);
-
-      if (existing) {
-        existing.category = fashion.category;
-        existing.material = fashion.material;
-        existing.pattern = fashion.pattern;
-        existing.color = fashion.color;
-        selectedFashionRegionRef.current = existing.id;
-        renderVisibleGuide();
-        refreshFashionState();
-        onFashionFillResult?.("selected");
-        flashFashionPulse(point, "magic");
-        return;
-      }
-      if (onBeforeFashionFill && !onBeforeFashionFill()) return;
+      if (!existing && onBeforeFashionFill && !onBeforeFashionFill()) return;
 
       const dimensions = fashionMaskDimensions(canvas.width, canvas.height);
       const mask = buildFashionRegionMask(
@@ -1916,6 +1995,26 @@ export const CanvasStage = forwardRef<CanvasStageHandle, CanvasStageProps>(
       if (!mask) {
         onFashionFillResult?.("miss");
         flashFashionPulse(point, "miss");
+        return;
+      }
+
+      if (existing) {
+        existing.category = fashion.category;
+        existing.material = fashion.material;
+        existing.pattern = fashion.pattern;
+        existing.color = fashion.color;
+        const previousMask = fashionMasksRef.current.get(existing.id);
+        if (previousMask) {
+          previousMask.canvas.width = 0;
+          previousMask.canvas.height = 0;
+        }
+        fashionMasksRef.current.set(existing.id, mask);
+        selectedFashionRegionRef.current = existing.id;
+        renderVisibleGuide();
+        refreshFashionState();
+        onFashionFillResult?.(mask.repaired ? "repaired" : "filled");
+        flashFashionPulse(point, "magic");
+        if ("vibrate" in navigator) navigator.vibrate(18);
         return;
       }
 

@@ -156,6 +156,74 @@ export const catalogAssets: StudioAsset[] = [
         <circle cx="160" cy="51" r="13" fill="#f5d581" stroke="#9f752c" stroke-width="4"/>
       </svg>`),
   },
+  {
+    id: "star-keychain",
+    name: "Starlight keychain",
+    category: "accessory",
+    accent: "#f06aa2",
+    prompt:
+      "a playful premium jeans keychain with a polished silver lobster clasp and short curb chain, a glossy hot-pink enamel star charm with a tiny gold center gem, designed to clip securely onto a denim belt loop and hang naturally at the hip",
+    src: svgData(`
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 360">
+        <defs>
+          <linearGradient id="metal" x1="0" x2="1">
+            <stop stop-color="#71808d"/>
+            <stop offset=".28" stop-color="#f8fcff"/>
+            <stop offset=".55" stop-color="#9eabb4"/>
+            <stop offset=".8" stop-color="#ffffff"/>
+            <stop offset="1" stop-color="#687682"/>
+          </linearGradient>
+          <linearGradient id="pink" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#ffb2cf"/>
+            <stop offset=".45" stop-color="#f04f91"/>
+            <stop offset="1" stop-color="#9f285f"/>
+          </linearGradient>
+          <radialGradient id="gem">
+            <stop stop-color="#fff8c7"/>
+            <stop offset=".38" stop-color="#ffd55e"/>
+            <stop offset="1" stop-color="#a96b16"/>
+          </radialGradient>
+          <filter id="shadow">
+            <feDropShadow dx="0" dy="8" stdDeviation="7" flood-opacity=".28"/>
+          </filter>
+        </defs>
+        <g filter="url(#shadow)">
+          <path
+            d="M73 31c-29 5-45 31-38 58 7 27 35 43 62 35 14-4 25-13 32-24l-19-12c-5 7-11 12-19 14-15 4-30-5-34-20-4-16 5-31 21-35 13-3 27 3 33 15l20-10c-11-18-34-26-58-21Z"
+            fill="url(#metal)"
+            stroke="#64717b"
+            stroke-width="5"
+          />
+          <path
+            d="M118 53c17 3 30 17 31 35 0 17-10 31-25 37l-13-21c9-3 15-11 15-20 0-10-6-18-16-21Z"
+            fill="url(#metal)"
+            stroke="#64717b"
+            stroke-width="5"
+          />
+          <g fill="none" stroke="url(#metal)" stroke-width="12">
+            <ellipse cx="111" cy="137" rx="18" ry="25"/>
+            <ellipse cx="111" cy="177" rx="18" ry="25"/>
+            <ellipse cx="111" cy="217" rx="18" ry="25"/>
+          </g>
+          <path
+            d="m110 225 24 49 54 8-39 38 9 54-48-25-48 25 9-54-39-38 54-8Z"
+            fill="url(#pink)"
+            stroke="#8e2b5d"
+            stroke-width="7"
+            stroke-linejoin="round"
+          />
+          <path
+            d="m110 242 14 29 32 5-23 22 5 31-28-15-28 15 5-31-23-22 32-5Z"
+            fill="none"
+            stroke="#ffd0df"
+            stroke-width="5"
+            stroke-linejoin="round"
+            opacity=".72"
+          />
+          <circle cx="110" cy="294" r="13" fill="url(#gem)" stroke="#9b671e" stroke-width="4"/>
+        </g>
+      </svg>`),
+  },
 ];
 
 export const makeupProducts: MakeupProduct[] = [
